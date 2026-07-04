@@ -191,6 +191,11 @@ export const workflowTool = defineTool<typeof WorkflowParams, WorkflowDetails>({
 				};
 			}
 
+			// The finally-abort is about to kill any fire-and-forget agents still
+			// in flight; mark them aborted now so the final snapshot doesn't
+			// freeze them as "running".
+			markUnfinishedAgentsAborted();
+
 			const rendered =
 				returnValue === undefined
 					? "(no return value)"

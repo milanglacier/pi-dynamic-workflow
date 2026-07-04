@@ -91,9 +91,10 @@ export function renderWorkflowResult(
 	}
 
 	const { expanded } = options;
-	const running = details.agents.filter((a) => a.status === "running" || a.status === "queued").length;
+	const running = details.agents.filter((a) => a.status === "running").length;
+	const queued = details.agents.filter((a) => a.status === "queued").length;
 	const failed = details.agents.filter((a) => a.status === "error").length;
-	const isRunning = running > 0 || !details.finishedAt;
+	const isRunning = running > 0 || queued > 0 || !details.finishedAt;
 
 	const headerIcon = details.scriptError
 		? theme.fg("error", "✗")
@@ -107,7 +108,7 @@ export function renderWorkflowResult(
 
 	const doneCount = details.agents.filter((a) => a.status === "done").length;
 	const status = isRunning
-		? `${doneCount}/${details.agents.length} agents done, ${running} running`
+		? `${doneCount}/${details.agents.length} agents done, ${running} running${queued > 0 ? `, ${queued} queued` : ""}`
 		: `${doneCount}/${details.agents.length} agents`;
 
 	let header = `${headerIcon} ${theme.fg("toolTitle", theme.bold(details.name))} ${theme.fg("accent", status)}`;

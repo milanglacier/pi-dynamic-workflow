@@ -171,6 +171,8 @@ test("un-awaited agent() does not surface an unhandled rejection", async () => {
 			ctx,
 		);
 		assert.match(firstText(result.content), /done/);
+		// The in-flight agent must not be frozen as "running" in the final snapshot.
+		assert.strictEqual(result.details.agents[0]?.status, "aborted");
 		// Give the SIGTERM'd subprocess time to close and the dangling promise to settle.
 		await new Promise((r) => setTimeout(r, 300));
 		assert.deepStrictEqual(rejections, []);
