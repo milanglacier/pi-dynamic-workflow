@@ -210,8 +210,10 @@ export async function runSubagent(request: SubagentRequest): Promise<SubagentRes
 				const killProc = () => {
 					result.aborted = true;
 					proc.kill("SIGTERM");
+					// NOTE: `proc.killed` only means a signal was *sent*, so it cannot
+					// detect a child that ignores SIGTERM; check exit status instead.
 					setTimeout(() => {
-						if (!proc.killed) proc.kill("SIGKILL");
+						if (proc.exitCode === null && proc.signalCode === null) proc.kill("SIGKILL");
 					}, 5000).unref();
 				};
 				if (signal.aborted) killProc();

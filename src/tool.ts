@@ -62,7 +62,10 @@ export const workflowTool = defineTool<typeof WorkflowParams, WorkflowDetails>({
 		const progressLine = () => {
 			const done = details.agents.filter((a) => a.status === "done").length;
 			const running = details.agents.filter((a) => a.status === "running").length;
-			return `Workflow "${details.name}": ${done}/${details.agents.length} agents done, ${running} running`;
+			const queued = details.agents.filter((a) => a.status === "queued").length;
+			let line = `Workflow "${details.name}": ${done}/${details.agents.length} agents done, ${running} running`;
+			if (queued > 0) line += `, ${queued} queued`;
+			return line;
 		};
 
 		// Internal controller so a script error or parent abort kills in-flight subprocesses.
@@ -77,7 +80,7 @@ export const workflowTool = defineTool<typeof WorkflowParams, WorkflowDetails>({
 		let currentPhase: string | undefined;
 		let agentCounter = 0;
 
-		const agentHook: ScriptHooks["agent"] = async (prompt, options?: AgentOptions) => {
+		const runAgent = async (prompt: string, options?: AgentOptions): Promise<unknown> => {
 			if (typeof prompt !== "string" || !prompt.trim()) {
 				throw new Error("agent() requires a non-empty prompt string");
 			}
@@ -89,7 +92,7 @@ export const workflowTool = defineTool<typeof WorkflowParams, WorkflowDetails>({
 			const record: AgentRecord = {
 				label: opts.label ?? `agent-${agentCounter}`,
 				...(phase !== undefined ? { phase } : {}),
-				status: "running",
+				status: "queued",
 				promptPreview: prompt.slice(0, 200),
 				output: "",
 				usage: emptyUsage(),
@@ -102,6 +105,10 @@ export const workflowTool = defineTool<typeof WorkflowParams, WorkflowDetails>({
 					record.status = "aborted";
 					throw new WorkflowAbortError();
 				}
+				// Only mark "running" once the semaphore slot is held, so queued
+				// agents are not misreported as active subprocesses.
+				record.status = "running";
+				emit();
 				return runSubagent({
 					prompt,
 					...(opts.model ? { model: opts.model } : {}),
@@ -138,6 +145,16 @@ export const workflowTool = defineTool<typeof WorkflowParams, WorkflowDetails>({
 			return opts.schema ? result.structured : result.outputText;
 		};
 
+		const agentHook: ScriptHooks["agent"] = (prompt, options?: AgentOptions) => {
+			const promise = runAgent(prompt, options);
+			// A fire-and-forget agent() call (script never awaits it) would otherwise
+			// surface WorkflowAbortError as an unhandledRejection in the host pi
+			// process when the finally-abort fires. The no-op catch marks the
+			// rejection handled; awaited callers still receive it.
+			promise.catch(() => {});
+			return promise;
+		};
+
 		const hooks: ScriptHooks = {
 			agent: agentHook,
 			parallel,
@@ -154,9 +171,9 @@ export const workflowTool = defineTool<typeof WorkflowParams, WorkflowDetails>({
 			args: params.args,
 		};
 
-		const markRunningAgentsAborted = () => {
+		const markUnfinishedAgentsAborted = () => {
 			for (const a of details.agents) {
-				if (a.status === "running") a.status = "aborted";
+				if (a.status === "running" || a.status === "queued") a.status = "aborted";
 			}
 		};
 
@@ -167,7 +184,7 @@ export const workflowTool = defineTool<typeof WorkflowParams, WorkflowDetails>({
 
 			if (signal?.aborted || controller.signal.aborted) {
 				details.aborted = true;
-				markRunningAgentsAborted();
+				markUnfinishedAgentsAborted();
 				return {
 					content: [{ type: "text", text: `Workflow "${details.name}" aborted. Partial progress: ${progressLine()}` }],
 					details: snapshot(),
@@ -186,8 +203,8 @@ export const workflowTool = defineTool<typeof WorkflowParams, WorkflowDetails>({
 				text += `\n\n[Result truncated: ${formatSize(truncation.outputBytes)} of ${formatSize(truncation.totalBytes)} shown]`;
 			}
 
-			const failed = details.agents.filter((a) => a.status === "error").length;
-			const header = `Workflow "${details.name}" finished: ${details.agents.length - failed}/${details.agents.length} agents succeeded.`;
+			const succeeded = details.agents.filter((a) => a.status === "done").length;
+			const header = `Workflow "${details.name}" finished: ${succeeded}/${details.agents.length} agents succeeded.`;
 			return {
 				content: [{ type: "text", text: `${header}\n\n${text}` }],
 				details: snapshot(),
@@ -195,7 +212,7 @@ export const workflowTool = defineTool<typeof WorkflowParams, WorkflowDetails>({
 		} catch (error) {
 			controller.abort();
 			details.finishedAt = Date.now();
-			markRunningAgentsAborted();
+			markUnfinishedAgentsAborted();
 
 			if (error instanceof WorkflowAbortError || signal?.aborted) {
 				details.aborted = true;

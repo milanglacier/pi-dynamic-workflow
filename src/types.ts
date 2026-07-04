@@ -22,7 +22,7 @@ export function addUsage(total: UsageStats, delta: UsageStats): void {
 	total.turns += delta.turns;
 }
 
-export type AgentStatus = "running" | "done" | "error" | "aborted";
+export type AgentStatus = "queued" | "running" | "done" | "error" | "aborted";
 
 /** One subagent invocation tracked in the run state. */
 export interface AgentRecord {

@@ -112,6 +112,73 @@ test("script error is thrown (pi marks isError)", async () => {
 	);
 });
 
+test("mid-run abort kills the in-flight agent and returns a partial result", async () => {
+	process.env.FAKE_PI_MODE = "sleep";
+	const controller = new AbortController();
+	setTimeout(() => controller.abort(), 100);
+	const start = Date.now();
+	const result = await workflowTool.execute(
+		"tc6",
+		{ name: "mid-abort", description: "d", script: `await agent("x"); return "unreachable";` },
+		controller.signal,
+		undefined,
+		ctx,
+	);
+	assert.ok(Date.now() - start < 5000, "should not wait out the 30s sleep");
+	assert.strictEqual(result.details.aborted, true);
+	assert.strictEqual(result.details.agents[0]?.status, "aborted");
+	assert.match(firstText(result.content), /aborted/i);
+});
+
+test("maxConcurrency: 1 serializes parallel agents", async () => {
+	process.env.FAKE_PI_MODE = "slow";
+	let peakRunning = 0;
+	const result = await workflowTool.execute(
+		"tc7",
+		{
+			name: "serial",
+			description: "d",
+			script: `return await parallel([() => agent("a"), () => agent("b")]);`,
+			maxConcurrency: 1,
+		},
+		undefined,
+		(partial) => {
+			const running = partial.details?.agents.filter((a) => a.status === "running").length ?? 0;
+			peakRunning = Math.max(peakRunning, running);
+		},
+		ctx,
+	);
+	assert.strictEqual(peakRunning, 1, "never more than one agent running");
+	assert.strictEqual(result.details.agents.filter((a) => a.status === "done").length, 2);
+});
+
+test("un-awaited agent() does not surface an unhandled rejection", async () => {
+	process.env.FAKE_PI_MODE = "sleep";
+	const rejections: unknown[] = [];
+	const onRejection = (reason: unknown) => rejections.push(reason);
+	process.on("unhandledRejection", onRejection);
+	try {
+		const result = await workflowTool.execute(
+			"tc8",
+			{
+				name: "fire-and-forget",
+				description: "d",
+				// agent() is never awaited; the finally-abort makes its promise reject.
+				script: `agent("x"); return "done";`,
+			},
+			undefined,
+			undefined,
+			ctx,
+		);
+		assert.match(firstText(result.content), /done/);
+		// Give the SIGTERM'd subprocess time to close and the dangling promise to settle.
+		await new Promise((r) => setTimeout(r, 300));
+		assert.deepStrictEqual(rejections, []);
+	} finally {
+		process.off("unhandledRejection", onRejection);
+	}
+});
+
 test("pre-aborted signal returns an aborted partial result without throwing", async () => {
 	process.env.FAKE_PI_MODE = "ok";
 	const controller = new AbortController();

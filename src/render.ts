@@ -39,6 +39,8 @@ function aggregateUsage(agents: AgentRecord[]): UsageStats {
 
 function statusIcon(status: AgentRecord["status"], theme: Theme): string {
 	switch (status) {
+		case "queued":
+			return theme.fg("muted", "·");
 		case "running":
 			return theme.fg("warning", "⏳");
 		case "done":
@@ -89,7 +91,7 @@ export function renderWorkflowResult(
 	}
 
 	const { expanded } = options;
-	const running = details.agents.filter((a) => a.status === "running").length;
+	const running = details.agents.filter((a) => a.status === "running" || a.status === "queued").length;
 	const failed = details.agents.filter((a) => a.status === "error").length;
 	const isRunning = running > 0 || !details.finishedAt;
 

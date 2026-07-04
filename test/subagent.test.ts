@@ -4,7 +4,9 @@
  */
 
 import assert from "node:assert";
+import * as fs from "node:fs";
 import * as os from "node:os";
+import * as path from "node:path";
 import { after, afterEach, before, test } from "node:test";
 import { runSubagent } from "../src/subagent.ts";
 import { installFakePi } from "./fake-pi.ts";
@@ -23,7 +25,19 @@ after(() => {
 afterEach(() => {
 	delete process.env.FAKE_PI_MODE;
 	delete process.env.PI_WORKFLOW_DEPTH;
+	delete process.env.FAKE_PI_ARGS_FILE;
 });
+
+async function capturedArgs(request: Parameters<typeof runSubagent>[0]): Promise<string[]> {
+	const argsFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "fake-pi-args-")), "args.json");
+	process.env.FAKE_PI_ARGS_FILE = argsFile;
+	try {
+		await runSubagent(request);
+		return JSON.parse(fs.readFileSync(argsFile, "utf-8"));
+	} finally {
+		fs.rmSync(path.dirname(argsFile), { recursive: true, force: true });
+	}
+}
 
 test("parses the JSON event stream: text, model, usage", async () => {
 	process.env.FAKE_PI_MODE = "ok";
@@ -80,6 +94,28 @@ test("schema run without emit_result call fails", async () => {
 	});
 	assert.strictEqual(result.ok, false);
 	assert.match(result.errorMessage ?? "", /emit_result/);
+});
+
+test("--tools restriction merges emit_result when a schema is supplied", async () => {
+	process.env.FAKE_PI_MODE = "structured";
+	const args = await capturedArgs({
+		prompt: "anything",
+		cwd,
+		tools: ["read", "grep"],
+		schema: { type: "object" },
+	});
+	const toolsIdx = args.indexOf("--tools");
+	assert.ok(toolsIdx >= 0, "--tools flag present");
+	assert.strictEqual(args[toolsIdx + 1], "read,grep,emit_result");
+	assert.ok(args.includes("-e"), "-e structured extension flag present");
+});
+
+test("--tools restriction is passed through unchanged without a schema", async () => {
+	process.env.FAKE_PI_MODE = "ok";
+	const args = await capturedArgs({ prompt: "anything", cwd, tools: ["read"] });
+	const toolsIdx = args.indexOf("--tools");
+	assert.strictEqual(args[toolsIdx + 1], "read");
+	assert.ok(!args.includes("-e"));
 });
 
 test("abort signal terminates the subprocess", async () => {
