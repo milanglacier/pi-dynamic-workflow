@@ -3,6 +3,7 @@
 	"version": "0.1.0",
 	"description": "Dynamic workflow orchestration for pi: the LLM authors a JS orchestration script that fans out isolated pi subagent sessions",
 	"type": "module",
+	"license": "MIT",
 	"keywords": ["pi-package"],
 	"pi": {
 		"extensions": ["./src/index.ts"]

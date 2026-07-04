@@ -1,6 +1,9 @@
 /**
  * Workflow authoring guide injected by the /workflow command, plus the
  * condensed description used on the `workflow` tool itself.
+ *
+ * NOTE: README.md mirrors the Script API and Design rules sections below.
+ * When editing either, keep the other in sync.
  */
 
 export const WORKFLOW_TOOL_DESCRIPTION = [
@@ -65,7 +68,7 @@ return { summary: inputs.length };  // return value becomes the tool result
 3. **Keep prompts self-contained.** Subagents share nothing with you or each other. Include file paths, acceptance criteria, and output format in every prompt. Tell agents to be concise; their final message is the return value.
 4. **Use \`schema\` when you need machine-readable output** (counts, verdicts, lists). Plain text is fine for prose to be aggregated by another agent.
 5. **Scale to what the user asked for.** A two-step task needs two agents, not a judge panel. Reserve heavy patterns for tasks that demand rigor.
-6. **Concurrency is capped** (default min(8, cpus-2)); you may launch many agents and let the scheduler queue them. Set \`maxConcurrency\` lower for heavy tasks.
+6. **Concurrency is capped** (default max(2, min(8, cpus-2))); you may launch many agents and let the scheduler queue them. Set \`maxConcurrency\` lower for heavy tasks.
 7. **Restrict tools** for read-only analysis agents (\`tools: ["read","grep","find","ls"]\`) so they cannot mutate the repo.
 
 ## Quality patterns (use when rigor matters)

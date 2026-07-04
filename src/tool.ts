@@ -27,7 +27,9 @@ const WorkflowParams = Type.Object({
 			"In scope: agent(), parallel(), pipeline(), phase(), log(), args.",
 	}),
 	args: Type.Optional(Type.Any({ description: "JSON value exposed to the script as `args`" })),
-	maxConcurrency: Type.Optional(Type.Number({ description: "Cap on concurrent subagents (default min(8, cpus-2))" })),
+	maxConcurrency: Type.Optional(
+		Type.Number({ description: "Cap on concurrent subagents (default max(2, min(8, cpus-2)))" }),
+	),
 });
 
 export const workflowTool = defineTool<typeof WorkflowParams, WorkflowDetails>({
@@ -52,7 +54,13 @@ export const workflowTool = defineTool<typeof WorkflowParams, WorkflowDetails>({
 			logs: [...details.logs],
 		});
 
+		// Set once execute() delivers its result; dangling fire-and-forget agent()
+		// continuations settle after that and must not call onUpdate for a
+		// completed tool call.
+		let finished = false;
+
 		const emit = () => {
+			if (finished) return;
 			onUpdate?.({
 				content: [{ type: "text", text: progressLine() }],
 				details: snapshot(),
@@ -231,6 +239,7 @@ export const workflowTool = defineTool<typeof WorkflowParams, WorkflowDetails>({
 			emit();
 			throw error;
 		} finally {
+			finished = true;
 			signal?.removeEventListener("abort", onParentAbort);
 			// Kill any stragglers from un-awaited agent() calls.
 			controller.abort();

@@ -41,7 +41,7 @@ This injects a brief into the next turn. The LLM plans phases, calls the `workfl
 | `phases`         | `string[]?`      | Optional ordered phase titles (documentation of the plan)                  |
 | `script`         | `string`         | Plain async JS body (top-level `await` / `return` allowed)                 |
 | `args`           | `any?`           | JSON value exposed to the script as `args`                                 |
-| `maxConcurrency` | `number?`        | Cap on concurrent subagents (default `min(8, cpus - 2)`)                   |
+| `maxConcurrency` | `number?`        | Cap on concurrent subagents (default `max(2, min(8, cpus - 2))`)           |
 
 ### Script API
 
@@ -87,7 +87,7 @@ return { summary: inputs.length };        // return value becomes the tool resul
 3. **Keep prompts self-contained.** Subagents share nothing with you or each other. Include file paths, acceptance criteria, and output format in every prompt. Tell agents to be concise — their final message is the return value.
 4. **Use `schema` when you need machine-readable output** (counts, verdicts, lists). Plain text is fine for prose to be aggregated by another agent.
 5. **Scale to what the user asked for.** A two-step task needs two agents, not a judge panel. Reserve heavy patterns for tasks that demand rigor.
-6. **Concurrency is capped** (default `min(8, cpus - 2)`); you may launch many agents and let the scheduler queue them. Set `maxConcurrency` lower for heavy tasks.
+6. **Concurrency is capped** (default `max(2, min(8, cpus - 2))`); you may launch many agents and let the scheduler queue them. Set `maxConcurrency` lower for heavy tasks.
 7. **Restrict tools** for read-only analysis agents (`tools: ["read","grep","find","ls"]`) so they cannot mutate the repo.
 
 ### Quality patterns (use when rigor matters)
