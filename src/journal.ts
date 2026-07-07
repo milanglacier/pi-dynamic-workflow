@@ -1,9 +1,10 @@
 /**
  * Per-run journaling for resume: every run records each successful agent()
  * call (keyed by a hash of prompt + behavioral options) to
- * `<agentDir>/pi-dynamic-workflow/runs/<runId>.json`. A later run passing
- * `resumeFromRunId` replays cached results for matching calls and only spawns
- * subagents for new or changed ones.
+ * `<agentDir>/pi-dynamic-workflow/runs/<runId>.jsonl` — one meta line followed
+ * by one appended line per completed call, so a crash mid-run loses at most
+ * the final partial line. A later run passing `resumeFromRunId` replays cached
+ * results for matching calls and only spawns subagents for new or changed ones.
  *
  * Cache semantics are a multiset (hash → queue of results in completion
  * order), not a strict sequence: parallel() completes in nondeterministic
@@ -42,7 +43,7 @@ export function runsDir(): string {
 }
 
 export function journalPath(runId: string): string {
-	return path.join(runsDir(), `${runId}.json`);
+	return path.join(runsDir(), `${runId}.jsonl`);
 }
 
 export function newRunId(name: string): string {
@@ -64,8 +65,14 @@ function stableStringify(value: unknown): string {
 /**
  * Cache key for one agent() call. Display-only options (label, phase) are
  * excluded so cosmetic edits to a script do not invalidate cached results.
+ * The resolved agent-type definition is behavioral: editing the `.md` between
+ * runs must invalidate the cache, not silently replay stale results.
  */
-export function agentCallHash(prompt: string, opts: AgentOptions): string {
+export function agentCallHash(
+	prompt: string,
+	opts: AgentOptions,
+	resolvedAgentType?: { systemPrompt: string; tools?: string[]; model?: string },
+): string {
 	const behavioral = {
 		prompt,
 		model: opts.model,
@@ -75,6 +82,13 @@ export function agentCallHash(prompt: string, opts: AgentOptions): string {
 		systemPrompt: opts.systemPrompt,
 		appendSystemPrompt: opts.appendSystemPrompt,
 		agentType: opts.agentType,
+		agentTypeResolved: resolvedAgentType
+			? {
+					systemPrompt: resolvedAgentType.systemPrompt,
+					tools: resolvedAgentType.tools,
+					model: resolvedAgentType.model,
+				}
+			: undefined,
 		timeout: opts.timeout,
 	};
 	return crypto.createHash("sha256").update(stableStringify(behavioral)).digest("hex");
@@ -83,9 +97,20 @@ export function agentCallHash(prompt: string, opts: AgentOptions): string {
 /** Load a run journal; returns null when missing or unreadable. */
 export function loadJournal(runId: string): RunJournal | null {
 	try {
-		const parsed = JSON.parse(fs.readFileSync(journalPath(runId), "utf-8")) as RunJournal;
-		if (!Array.isArray(parsed.entries)) return null;
-		return parsed;
+		const lines = fs.readFileSync(journalPath(runId), "utf-8").split("\n");
+		const metaLine = lines.shift();
+		if (!metaLine?.trim()) return null;
+		const meta = JSON.parse(metaLine) as Omit<RunJournal, "entries">;
+		const entries: JournalEntry[] = [];
+		for (const line of lines) {
+			if (!line.trim()) continue;
+			try {
+				entries.push(JSON.parse(line) as JournalEntry);
+			} catch {
+				// A truncated tail line (crash mid-append) invalidates only itself.
+			}
+		}
+		return { ...meta, entries };
 	} catch {
 		return null;
 	}
@@ -107,7 +132,7 @@ function pruneOldRuns(dir: string): void {
 	try {
 		entries = fs
 			.readdirSync(dir)
-			.filter((f) => f.endsWith(".json"))
+			.filter((f) => f.endsWith(".jsonl"))
 			.map((f) => {
 				const p = path.join(dir, f);
 				return { path: p, mtimeMs: fs.statSync(p).mtimeMs };
@@ -127,33 +152,29 @@ function pruneOldRuns(dir: string): void {
 }
 
 /**
- * Journals a run as it progresses. All disk I/O is best-effort: a failed
- * write must never take down the workflow it is recording.
+ * Journals a run as it progresses: a meta line at creation, then one appended
+ * line per recorded call — O(1) per entry, no full-file rewrites. All disk I/O
+ * is best-effort: a failed write must never take down the workflow it is
+ * recording.
  */
 export class JournalWriter {
-	private readonly journal: RunJournal;
 	readonly filePath: string;
 
 	constructor(meta: { runId: string; name: string; description: string; script: string }) {
-		this.journal = { ...meta, createdAt: Date.now(), entries: [] };
 		this.filePath = journalPath(meta.runId);
 		try {
 			fs.mkdirSync(runsDir(), { recursive: true });
+			fs.writeFileSync(this.filePath, `${JSON.stringify({ ...meta, createdAt: Date.now() })}\n`);
+			// Prune after writing so this run (newest mtime) survives the cut.
 			pruneOldRuns(runsDir());
 		} catch {
 			// best-effort
 		}
-		this.flush();
 	}
 
 	record(entry: JournalEntry): void {
-		this.journal.entries.push(entry);
-		this.flush();
-	}
-
-	private flush(): void {
 		try {
-			fs.writeFileSync(this.filePath, JSON.stringify(this.journal));
+			fs.appendFileSync(this.filePath, `${JSON.stringify(entry)}\n`);
 		} catch {
 			// best-effort
 		}

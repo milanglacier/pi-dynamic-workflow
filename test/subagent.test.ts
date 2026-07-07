@@ -66,6 +66,14 @@ test("refuses to spawn at the depth limit", async () => {
 	assert.match(result.errorMessage ?? "", /nesting depth limit/);
 });
 
+test("external signal death reports failure, not success with partial output", async () => {
+	process.env.FAKE_PI_MODE = "selfkill";
+	const result = await runSubagent({ prompt: "anything", cwd });
+	assert.strictEqual(result.ok, false);
+	assert.strictEqual(result.aborted, false);
+	assert.match(result.errorMessage ?? "", /killed by signal/);
+});
+
 test("nonzero exit reports failure with stderr", async () => {
 	process.env.FAKE_PI_MODE = "fail";
 	const result = await runSubagent({ prompt: "anything", cwd });

@@ -45,7 +45,7 @@ This injects a brief into the next turn. The LLM plans phases, calls the `workfl
 | `args`            | `any?`      | JSON value exposed to the script as `args`                                      |
 | `maxConcurrency`  | `number?`   | Cap on concurrent subagents (default `max(2, min(8, cpus - 2))`)                |
 | `maxAgents`       | `number?`   | Cap on total `agent()` calls per run (default and hard max 200)                 |
-| `maxCost`         | `number?`   | Budget in USD; once spent, further `agent()` calls throw (soft cap)             |
+| `maxCost`         | `number?`   | Budget in USD; once spent, further `agent()` calls throw a `BudgetExceededError` (soft cap) |
 | `maxTokens`       | `number?`   | Budget in tokens (input+output); same enforcement as `maxCost`                  |
 | `resumeFromRunId` | `string?`   | Replay a prior run's journal; unchanged `agent()` calls return cached results   |
 | `background`      | `boolean?`  | Return immediately; a `workflow-complete` message arrives when the run finishes |
@@ -114,10 +114,12 @@ Drop reusable scripts in `~/.pi/agent/workflows/*.js` (user) or `<project>/.pi/w
 
 ### Resume
 
-Every run writes a journal to `~/.pi/agent/pi-dynamic-workflow/runs/<runId>.json`
-(successful agent calls only, keyed by a hash of prompt + behavioral options; the 50
-newest runs are kept). Re-invoking the tool with `resumeFromRunId` replays matching
-calls from cache — shown with a `↺` icon, free of budget — and only runs what changed.
+Every run writes an append-only journal to `~/.pi/agent/pi-dynamic-workflow/runs/<runId>.jsonl`
+(successful agent calls only, keyed by a hash of prompt + behavioral options — including
+the resolved `agentType` definition, so editing an agent `.md` invalidates its cached
+calls; the 50 newest runs are kept). Re-invoking the tool with `resumeFromRunId` replays
+matching calls from cache — shown with a `↺` icon, free of budget — and only runs what
+changed.
 
 ### Background runs
 

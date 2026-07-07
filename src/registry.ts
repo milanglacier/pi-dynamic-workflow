@@ -91,9 +91,10 @@ export function loadWorkflowSource(nameOrPath: string, cwd: string): { source: s
 		const filePath = path.resolve(cwd, nameOrPath);
 		return { source: fs.readFileSync(filePath, "utf-8"), filePath };
 	}
-	const saved = discoverWorkflows(cwd).get(nameOrPath);
+	const workflows = discoverWorkflows(cwd);
+	const saved = workflows.get(nameOrPath);
 	if (!saved) {
-		const available = [...discoverWorkflows(cwd).keys()].join(", ") || "(none found)";
+		const available = [...workflows.keys()].join(", ") || "(none found)";
 		throw new Error(`Unknown workflow "${nameOrPath}". Saved workflows: ${available}`);
 	}
 	return { source: fs.readFileSync(saved.filePath, "utf-8"), filePath: saved.filePath };

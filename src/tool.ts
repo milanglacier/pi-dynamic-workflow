@@ -79,16 +79,29 @@ const WorkflowParams = Type.Object({
 export const WORKFLOW_COMPLETE_TYPE = "workflow-complete";
 
 /** Host capabilities the tool needs beyond the per-call ExtensionContext. */
-export type WorkflowToolHost = Partial<Pick<ExtensionAPI, "sendMessage">>;
+export type WorkflowToolHost = Partial<Pick<ExtensionAPI, "sendMessage" | "appendEntry">>;
+
+/** Thrown by agent() once the run's maxCost/maxTokens budget is spent. Scripts
+ * can catch it by name (`e.name === "BudgetExceededError"`) to return partial results. */
+export class BudgetExceededError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "BudgetExceededError";
+	}
+}
 
 // Background runs in flight, keyed by runId, so /workflow-stop and
-// session_shutdown can abort them.
+// session_shutdown can abort them. Module-level (not per createWorkflowTool
+// instance) so the /workflow-stop command reaches runs regardless of which
+// tool instance started them; one extension instance per process in practice.
 const activeBackgroundRuns = new Map<string, AbortController>();
 
 /** Abort a background run. Returns false when no such run is active. */
 export function stopWorkflowRun(runId: string): boolean {
 	const controller = activeBackgroundRuns.get(runId);
 	if (!controller) return false;
+	// Deregister immediately so a stopping run is no longer listed as active.
+	activeBackgroundRuns.delete(runId);
 	controller.abort();
 	return true;
 }
@@ -166,7 +179,7 @@ export const createWorkflowTool = (host: WorkflowToolHost = {}) =>
 			else parentSignal.addEventListener("abort", onParentAbort, { once: true });
 		}
 
-		const semaphore = new Semaphore(params.maxConcurrency ?? defaultConcurrency());
+		const semaphore = new Semaphore(Math.max(1, params.maxConcurrency ?? defaultConcurrency()));
 		let currentPhase: string | undefined;
 		let agentCounter = 0;
 		const maxAgents = Math.max(1, Math.min(params.maxAgents ?? MAX_AGENTS_PER_RUN, MAX_AGENTS_PER_RUN));
@@ -232,7 +245,7 @@ export const createWorkflowTool = (host: WorkflowToolHost = {}) =>
 			const opts = options ?? {};
 			const agentDef = opts.agentType ? resolveAgentType(opts.agentType) : undefined;
 			const phase = opts.phase ?? currentPhase;
-			const callHash = agentCallHash(prompt, opts);
+			const callHash = agentCallHash(prompt, opts, agentDef);
 
 			// Resume: replay a recorded result for a matching call without spawning.
 			const cachedEntry = resumeCache?.get(callHash)?.shift();
@@ -262,7 +275,7 @@ export const createWorkflowTool = (host: WorkflowToolHost = {}) =>
 					details.logs.push(`budget exhausted: $${u.cost.toFixed(4)} spent, ${u.input + u.output} tokens`);
 					emit();
 				}
-				throw new Error(
+				throw new BudgetExceededError(
 					`Workflow budget exceeded (spent $${u.cost.toFixed(4)}, ${u.input + u.output} tokens); agent() refused`,
 				);
 			}
@@ -354,22 +367,32 @@ export const createWorkflowTool = (host: WorkflowToolHost = {}) =>
 		// controller, and agent/budget accounting (all closures above). This is
 		// orthogonal to the PI_WORKFLOW_DEPTH guard in subagent.ts: no extra pi
 		// process is spawned for a nested workflow, only for its agent() calls.
-		let nestingDepth = 0;
+		// The one-level limit is enforced per invocation chain (the child gets a
+		// throwing workflow hook), not via a shared counter, so concurrent
+		// sibling workflow() calls at the top level are allowed.
 		const runNestedWorkflow = async (nameOrPath: string, nestedArgs?: unknown): Promise<unknown> => {
 			if (typeof nameOrPath !== "string" || !nameOrPath.trim()) {
 				throw new Error("workflow() requires a saved workflow name or a .js path");
 			}
-			if (nestingDepth >= 1) {
-				throw new Error("workflow() nesting is limited to one level");
-			}
 			const loaded = loadWorkflowSource(nameOrPath, ctx.cwd);
-			nestingDepth++;
+			const childName = path.basename(nameOrPath, ".js");
 			const prevPhase = currentPhase;
 			hooks.log(`── workflow ${nameOrPath}`);
+			const childHooks: ScriptHooks = {
+				...hooks,
+				args: nestedArgs,
+				// Attribute the child's output: its logs and phases carry its name.
+				log: (message) => hooks.log(`[${childName}] ${message}`),
+				phase: (title) => hooks.phase(`${childName}: ${title}`),
+				workflow: async () => {
+					throw new Error("workflow() nesting is limited to one level");
+				},
+			};
 			try {
-				return await runWorkflowScript(loaded.source, { ...hooks, args: nestedArgs });
+				return await runWorkflowScript(loaded.source, childHooks);
 			} finally {
-				nestingDepth--;
+				// Best-effort restore; display-only, so last-finisher-wins among
+				// concurrent siblings is acceptable.
 				currentPhase = prevPhase;
 			}
 		};
@@ -418,6 +441,9 @@ export const createWorkflowTool = (host: WorkflowToolHost = {}) =>
 				description: params.description,
 				script: scriptSource,
 			});
+			// Persist a pointer in the session JSONL (outside LLM context) so
+			// resumable runs are discoverable even after a crash.
+			host.appendEntry?.("workflow-run", { runId, path: journal.filePath });
 
 			const returnValue = await runWorkflowScript(scriptSource, hooks);
 			details.returnValue = returnValue;

@@ -9,7 +9,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { after, afterEach, before, test } from "node:test";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { agentCallHash, buildResumeCache, loadJournal, type RunJournal } from "../src/journal.ts";
+import { agentCallHash, buildResumeCache, journalPath, loadJournal, type RunJournal } from "../src/journal.ts";
 import { createWorkflowTool } from "../src/tool.ts";
 import { installFakePi } from "./fake-pi.ts";
 
@@ -46,6 +46,16 @@ test("agentCallHash: stable across key order, ignores label/phase, changes with 
 	assert.strictEqual(a, b, "label/phase and option order must not affect the hash");
 	assert.notStrictEqual(a, agentCallHash("p2", { model: "m", tools: ["read"] }));
 	assert.notStrictEqual(a, agentCallHash("p", { model: "m2", tools: ["read"] }));
+});
+
+test("agentCallHash changes when the resolved agentType definition changes", () => {
+	const opts = { agentType: "reviewer" };
+	const v1 = agentCallHash("p", opts, { systemPrompt: "Be strict.", tools: ["read"], model: "m" });
+	const v1Again = agentCallHash("p", opts, { systemPrompt: "Be strict.", tools: ["read"], model: "m" });
+	assert.strictEqual(v1, v1Again, "identical resolved definitions hash identically");
+	assert.notStrictEqual(v1, agentCallHash("p", opts, { systemPrompt: "Be lenient.", tools: ["read"], model: "m" }));
+	assert.notStrictEqual(v1, agentCallHash("p", opts, { systemPrompt: "Be strict.", tools: ["read", "bash"], model: "m" }));
+	assert.notStrictEqual(v1, agentCallHash("p", opts, { systemPrompt: "Be strict.", tools: ["read"], model: "m2" }));
 });
 
 test("buildResumeCache groups duplicate hashes into queues", () => {
@@ -171,6 +181,112 @@ test("resume with an unknown runId logs and runs everything live", async () => {
 	);
 	assert.strictEqual(result.details.agents[0]?.status, "done");
 	assert.ok(result.details.logs.some((l) => /no journal found/.test(l)));
+});
+
+test("resume after an agent-definition edit runs live instead of replaying stale results", async () => {
+	process.env.FAKE_PI_MODE = "ok";
+	const projDir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-agents-edit-"));
+	const agentsDir = path.join(projDir, ".pi", "agents");
+	fs.mkdirSync(agentsDir, { recursive: true });
+	const writeDef = (prompt: string) =>
+		fs.writeFileSync(
+			path.join(agentsDir, "reviewer.md"),
+			`---\nname: reviewer\ndescription: reviews code\n---\n${prompt}\n`,
+		);
+	const projCtx = { cwd: projDir, hasUI: false } as unknown as ExtensionContext;
+	const script = `return await agent("check", { agentType: "reviewer" });`;
+	try {
+		writeDef("Be strict.");
+		const first = await workflowTool.execute(
+			"j9",
+			{ name: "typed-src", description: "d", script },
+			undefined,
+			undefined,
+			projCtx,
+		);
+		const runId = first.details.runId as string;
+
+		// Unchanged definition: served from cache.
+		const unchanged = await workflowTool.execute(
+			"j10",
+			{ name: "typed-hit", description: "d", script, resumeFromRunId: runId },
+			undefined,
+			undefined,
+			projCtx,
+		);
+		assert.strictEqual(unchanged.details.agents[0]?.status, "cached");
+
+		// Edited definition: same prompt and options, but the resolved system
+		// prompt changed — the cache must miss and the agent run live.
+		writeDef("Be lenient.");
+		const edited = await workflowTool.execute(
+			"j11",
+			{ name: "typed-miss", description: "d", script, resumeFromRunId: runId },
+			undefined,
+			undefined,
+			projCtx,
+		);
+		assert.strictEqual(edited.details.agents[0]?.status, "done");
+	} finally {
+		fs.rmSync(projDir, { recursive: true, force: true });
+	}
+});
+
+test("loadJournal tolerates a truncated final line (crash mid-append)", async () => {
+	process.env.FAKE_PI_MODE = "ok";
+	const result = await workflowTool.execute(
+		"j12",
+		{ name: "trunc", description: "d", script: `await agent("a"); await agent("b"); return "ok";` },
+		undefined,
+		undefined,
+		ctx,
+	);
+	const runId = result.details.runId as string;
+	fs.appendFileSync(journalPath(runId), '{"hash":"partia');
+	const journal = loadJournal(runId);
+	assert.ok(journal, "journal still loads");
+	assert.strictEqual(journal.entries.length, 2, "only the truncated line is dropped");
+	assert.strictEqual(journal.runId, runId);
+});
+
+test("background run resumes from a prior journal", async () => {
+	process.env.FAKE_PI_MODE = "ok";
+	const first = await workflowTool.execute(
+		"j13",
+		{ name: "bg-src", description: "d", script: `return await agent("bg prompt");` },
+		undefined,
+		undefined,
+		ctx,
+	);
+	const runId = first.details.runId as string;
+
+	const messages: string[] = [];
+	const bgTool = createWorkflowTool({
+		sendMessage: ((msg: { content: unknown }) => {
+			messages.push(String(msg.content));
+		}) as never,
+	});
+	// A live spawn would fail under FAKE_PI_MODE=fail; the cache must serve it.
+	process.env.FAKE_PI_MODE = "fail";
+	await bgTool.execute(
+		"j14",
+		{
+			name: "bg-resume",
+			description: "d",
+			script: `return await agent("bg prompt");`,
+			background: true,
+			resumeFromRunId: runId,
+		},
+		undefined,
+		undefined,
+		ctx,
+	);
+	const start = Date.now();
+	while (messages.length === 0) {
+		if (Date.now() - start > 5000) throw new Error("timed out waiting for workflow-complete");
+		await new Promise((r) => setTimeout(r, 25));
+	}
+	assert.match(messages[0] as string, /1\/1 agents succeeded \(1 from cache\)/);
 });
 
 test("cached replays do not count against the budget", async () => {

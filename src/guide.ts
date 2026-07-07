@@ -13,7 +13,7 @@ export const WORKFLOW_TOOL_DESCRIPTION = [
 	"parallel([...thunks]) runs thunks concurrently; failed thunks become null (never rejects).",
 	"pipeline(items, ...stages) flows each item through the stages independently with no cross-item barrier; a throwing stage drops that item to null.",
 	"phase(title) groups subsequent agent() calls under a phase; log(msg) records progress; args is the tool's `args` parameter.",
-	"budget ({maxCost, maxTokens, spentCost(), spentTokens(), remainingCost(), remainingTokens(), exceeded()}) reflects the maxCost/maxTokens caps; once exceeded, agent() throws.",
+	'budget ({maxCost, maxTokens, spentCost(), spentTokens(), remainingCost(), remainingTokens(), exceeded()}) reflects the maxCost/maxTokens caps; once exceeded, agent() throws a BudgetExceededError (catch via e.name === "BudgetExceededError").',
 	"workflow(nameOrPath, args) runs a saved workflow inline (one nesting level).",
 	"Top-level await and return are allowed; the script's return value becomes the tool result.",
 	"Scripts must be deterministic: Date.now(), Math.random(), and zero-arg new Date() throw — pass timestamps/seeds via args. Every run is journaled under a run id; pass resumeFromRunId to replay unchanged agent() calls from cache. Set background: true to return immediately and get a workflow-complete message when done.",
@@ -35,7 +35,7 @@ You have access to a \`workflow\` tool that executes a JavaScript orchestration 
 - \`args\`: optional JSON value available to the script as \`args\`
 - \`maxConcurrency\`: optional cap on concurrent subagents
 - \`maxAgents\`: optional cap on total \`agent()\` calls (default 200)
-- \`maxCost\` / \`maxTokens\`: optional budget; once total subagent spend reaches it, further \`agent()\` calls throw (in-flight agents finish — a soft cap)
+- \`maxCost\` / \`maxTokens\`: optional budget; once total subagent spend reaches it, further \`agent()\` calls throw a \`BudgetExceededError\` — catch via \`e.name === "BudgetExceededError"\` to return partial results (in-flight agents finish — a soft cap)
 - \`resumeFromRunId\`: replay a prior run's journal — \`agent()\` calls whose prompt+options match return the recorded result instantly; new or changed calls run live. Every result reports its run id.
 - \`background\`: return immediately and run detached; a \`workflow-complete\` message arrives when the run finishes (stop early with \`/workflow-stop <runId>\`)
 

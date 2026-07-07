@@ -244,6 +244,49 @@ try { await agent("two"); return "no-throw"; } catch (e) { return "blocked at $"
 	assert.deepStrictEqual(result.details.budget, { maxCost: 0.0005 });
 });
 
+test("budget: maxTokens stops further agent() calls with a named error", async () => {
+	process.env.FAKE_PI_MODE = "ok"; // each fake agent uses 3 tokens (1 input + 2 output)
+	const result = await workflowTool.execute(
+		"tc16",
+		{
+			name: "token-budget",
+			description: "d",
+			script: `
+await agent("one");
+try { await agent("two"); return "no-throw"; } catch (e) { return "blocked:" + e.name + ":" + budget.spentTokens(); }
+`,
+			maxTokens: 3,
+		},
+		undefined,
+		undefined,
+		ctx,
+	);
+	assert.match(firstText(result.content), /blocked:BudgetExceededError:3/);
+	assert.strictEqual(result.details.agents.length, 1);
+});
+
+test("a run appends a workflow-run entry with its journal path", async () => {
+	process.env.FAKE_PI_MODE = "ok";
+	const entries: Array<{ type: string; data: unknown }> = [];
+	const tool = createWorkflowTool({
+		appendEntry: ((customType: string, data: unknown) => {
+			entries.push({ type: customType, data });
+		}) as never,
+	});
+	const result = await tool.execute(
+		"tc17",
+		{ name: "logged", description: "d", script: `return "ok";` },
+		undefined,
+		undefined,
+		ctx,
+	);
+	assert.strictEqual(entries.length, 1);
+	assert.strictEqual(entries[0]?.type, "workflow-run");
+	const data = entries[0]?.data as { runId: string; path: string };
+	assert.strictEqual(data.runId, result.details.runId);
+	assert.ok(data.path.endsWith(`${data.runId}.jsonl`), "entry points at the journal file");
+});
+
 test("per-agent timeout resolves to null with an error record", async () => {
 	process.env.FAKE_PI_MODE = "sleep";
 	const start = Date.now();

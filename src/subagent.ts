@@ -220,7 +220,9 @@ export async function runSubagent(request: SubagentRequest): Promise<SubagentRes
 
 			// NOTE: `proc.killed` only means a signal was *sent*, so it cannot
 			// detect a child that ignores SIGTERM; check exit status instead.
+			let killedByUs = false;
 			const terminate = () => {
+				killedByUs = true;
 				proc.kill("SIGTERM");
 				setTimeout(() => {
 					if (proc.exitCode === null && proc.signalCode === null) proc.kill("SIGKILL");
@@ -236,9 +238,17 @@ export async function runSubagent(request: SubagentRequest): Promise<SubagentRes
 				timeoutTimer.unref();
 			}
 
-			proc.on("close", (code) => {
+			proc.on("close", (code, killSignal) => {
 				if (timeoutTimer) clearTimeout(timeoutTimer);
 				if (buffer.trim()) processLine(buffer);
+				// A null code means signal death. Our own kills are reported via
+				// the aborted/timedOut flags; an external kill (OOM killer, manual
+				// SIGKILL) must read as failure, not as a success with partial output.
+				if (code === null && !killedByUs) {
+					result.errorMessage ??= `pi killed by signal ${killSignal ?? "unknown"}`;
+					resolve(1);
+					return;
+				}
 				resolve(code ?? 0);
 			});
 

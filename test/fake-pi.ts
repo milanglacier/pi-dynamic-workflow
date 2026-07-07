@@ -9,6 +9,7 @@
  *   fail       - writes "boom" to stderr, exit 3
  *   sleep      - hangs for 30s (for abort tests; SIGTERM kills it)
  *   slow       - waits 150ms, then behaves like "ok" (for concurrency tests)
+ *   selfkill   - SIGKILLs itself after emitting one message (external signal death)
  *
  * If FAKE_PI_ARGS_FILE is set, the stub writes its argv (JSON array) to that
  * path before doing anything else, so tests can assert on the CLI invocation.
@@ -85,6 +86,10 @@ switch (mode) {
 			console.log(message([{ type: "text", text: "FAKE_PI_OK" }]));
 			process.exit(0);
 		}, 150);
+		break;
+	case "selfkill":
+		console.log(message([{ type: "text", text: "PARTIAL_OUTPUT" }]));
+		process.kill(process.pid, "SIGKILL");
 		break;
 	default:
 		console.error("unknown FAKE_PI_MODE: " + mode);

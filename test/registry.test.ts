@@ -162,6 +162,46 @@ test("nested workflow() shares agent accounting and passes args", async () => {
 	}
 });
 
+test("concurrent sibling workflow() calls are allowed; child logs and phases are prefixed", async () => {
+	process.env.FAKE_PI_MODE = "ok";
+	const proj = makeProject({
+		child: `phase("scan"); log("inside"); const out = await agent("go " + args.tag); return args.tag + ":" + out;`,
+	});
+	try {
+		const result = await workflowTool.execute(
+			"reg6",
+			{
+				name: "siblings",
+				description: "d",
+				script: `
+const [a, b] = await parallel([
+  () => workflow("child", { tag: "one" }),
+  () => workflow("child", { tag: "two" }),
+]);
+return a + "|" + b;
+`,
+			},
+			undefined,
+			undefined,
+			ctxFor(proj.dir),
+		);
+		// Top-level siblings are not nesting; both must run (parallel() maps a
+		// spurious nesting rejection to null, which would fail these asserts).
+		assert.match(firstText(result.content), /one:FAKE_PI_OK\|two:FAKE_PI_OK/);
+		assert.strictEqual(result.details.agents.length, 2);
+		assert.ok(
+			result.details.logs.some((l) => l === "[child] inside"),
+			"child log() lines carry the child's name",
+		);
+		assert.ok(
+			result.details.logs.some((l) => l === "── child: scan"),
+			"child phase() titles carry the child's name",
+		);
+	} finally {
+		proj.cleanup();
+	}
+});
+
 test("workflow() nesting beyond one level is refused", async () => {
 	const proj = makeProject({
 		level1: `return await workflow("level2");`,
