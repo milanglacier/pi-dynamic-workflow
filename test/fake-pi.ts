@@ -12,6 +12,11 @@
  *
  * If FAKE_PI_ARGS_FILE is set, the stub writes its argv (JSON array) to that
  * path before doing anything else, so tests can assert on the CLI invocation.
+ *
+ * If FAKE_PI_COPY_APPEND_PROMPTS is also set, the stub reads the contents of
+ * every --append-system-prompt file argument and writes them (JSON array) to
+ * `${FAKE_PI_ARGS_FILE}.prompts` — the parent deletes those temp files after
+ * the run, so tests must snapshot them from inside the child.
  */
 
 import * as fs from "node:fs";
@@ -21,7 +26,16 @@ import * as path from "node:path";
 const STUB_SOURCE = `#!/usr/bin/env node
 const mode = process.env.FAKE_PI_MODE || "ok";
 if (process.env.FAKE_PI_ARGS_FILE) {
-	require("node:fs").writeFileSync(process.env.FAKE_PI_ARGS_FILE, JSON.stringify(process.argv.slice(2)));
+	const fs = require("node:fs");
+	const argv = process.argv.slice(2);
+	fs.writeFileSync(process.env.FAKE_PI_ARGS_FILE, JSON.stringify(argv));
+	if (process.env.FAKE_PI_COPY_APPEND_PROMPTS) {
+		const prompts = [];
+		argv.forEach((a, i) => {
+			if (a === "--append-system-prompt") prompts.push(fs.readFileSync(argv[i + 1], "utf-8"));
+		});
+		fs.writeFileSync(process.env.FAKE_PI_ARGS_FILE + ".prompts", JSON.stringify(prompts));
+	}
 }
 const message = (content, stopReason = "stop") =>
 	JSON.stringify({

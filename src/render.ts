@@ -49,6 +49,8 @@ function statusIcon(status: AgentRecord["status"], theme: Theme): string {
 			return theme.fg("error", "✗");
 		case "aborted":
 			return theme.fg("muted", "⊘");
+		case "cached":
+			return theme.fg("success", "↺");
 	}
 }
 
@@ -106,7 +108,7 @@ export function renderWorkflowResult(
 					? theme.fg("warning", "◐")
 					: theme.fg("success", "✓");
 
-	const doneCount = details.agents.filter((a) => a.status === "done").length;
+	const doneCount = details.agents.filter((a) => a.status === "done" || a.status === "cached").length;
 	const status = isRunning
 		? `${doneCount}/${details.agents.length} agents done, ${running} running${queued > 0 ? `, ${queued} queued` : ""}`
 		: `${doneCount}/${details.agents.length} agents`;
@@ -163,6 +165,16 @@ export function renderWorkflowResult(
 	const totalStr = formatUsage(total);
 	if (totalStr) {
 		container.addChild(new Text(theme.fg("dim", `Total: ${totalStr}`), 0, 0));
+	}
+	if (details.budget) {
+		const parts: string[] = [];
+		if (details.budget.maxCost !== undefined) {
+			parts.push(`$${total.cost.toFixed(4)} / $${details.budget.maxCost}`);
+		}
+		if (details.budget.maxTokens !== undefined) {
+			parts.push(`${formatTokens(total.input + total.output)} / ${formatTokens(details.budget.maxTokens)} tokens`);
+		}
+		container.addChild(new Text(theme.fg("dim", `Budget: ${parts.join(", ")}`), 0, 0));
 	}
 	if (!expanded && !isRunning) {
 		container.addChild(new Text(theme.fg("muted", "(Ctrl+O to expand)"), 0, 0));

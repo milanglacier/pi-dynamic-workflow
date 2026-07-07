@@ -34,14 +34,23 @@ This injects a brief into the next turn. The LLM plans phases, calls the `workfl
 
 ### The `workflow` tool
 
-| Parameter        | Type             | Description                                                                |
-| ---------------- | ---------------- | -------------------------------------------------------------------------- |
-| `name`           | `string`         | Short kebab-case workflow name                                             |
-| `description`    | `string`         | One-sentence description                                                   |
-| `phases`         | `string[]?`      | Optional ordered phase titles (documentation of the plan)                  |
-| `script`         | `string`         | Plain async JS body (top-level `await` / `return` allowed)                 |
-| `args`           | `any?`           | JSON value exposed to the script as `args`                                 |
-| `maxConcurrency` | `number?`        | Cap on concurrent subagents (default `max(2, min(8, cpus - 2))`)           |
+| Parameter         | Type        | Description                                                                     |
+| ----------------- | ----------- | ------------------------------------------------------------------------------- |
+| `name`            | `string`    | Short kebab-case workflow name                                                  |
+| `description`     | `string`    | One-sentence description                                                        |
+| `phases`          | `string[]?` | Optional ordered phase titles (documentation of the plan)                       |
+| `script`          | `string?`   | Plain async JS body (top-level `await` / `return` allowed)                      |
+| `workflowName`    | `string?`   | Run a saved workflow by name instead of an inline script                        |
+| `scriptPath`      | `string?`   | Run a workflow script from a `.js` file (relative to the session cwd)           |
+| `args`            | `any?`      | JSON value exposed to the script as `args`                                      |
+| `maxConcurrency`  | `number?`   | Cap on concurrent subagents (default `max(2, min(8, cpus - 2))`)                |
+| `maxAgents`       | `number?`   | Cap on total `agent()` calls per run (default and hard max 200)                 |
+| `maxCost`         | `number?`   | Budget in USD; once spent, further `agent()` calls throw (soft cap)             |
+| `maxTokens`       | `number?`   | Budget in tokens (input+output); same enforcement as `maxCost`                  |
+| `resumeFromRunId` | `string?`   | Replay a prior run's journal; unchanged `agent()` calls return cached results   |
+| `background`      | `boolean?`  | Return immediately; a `workflow-complete` message arrives when the run finishes |
+
+Provide exactly one of `script`, `workflowName`, or `scriptPath`.
 
 ### Script API
 
@@ -60,7 +69,12 @@ const info = await agent("Count the exported functions in src/foo.ts", {
 });
 
 // Per-agent options: label, phase, model, tools (e.g. ["read","grep"]),
-// cwd (working dir relative to the session), schema (JSON Schema).
+// cwd (working dir relative to the session), schema (JSON Schema),
+// timeout (ms; kills the subagent and resolves null), systemPrompt,
+// appendSystemPrompt, and agentType — a saved agent definition from
+// ~/.pi/agent/agents/*.md or <project>/.pi/agents/*.md (frontmatter
+// name/description/tools/model; body = system prompt).
+const verdict = await agent("Review src/auth.ts", { agentType: "security-reviewer", timeout: 120000 });
 
 // Run thunks concurrently. Failures become null; the batch never rejects.
 const results = await parallel(files.map(f => () => agent(`Review ${f}`, { label: f })));
@@ -77,8 +91,40 @@ const fixed = await pipeline(files,
 phase("aggregate");                       // set the default phase for subsequent agent() calls
 log("merging results");                   // progress note shown in the TUI
 const inputs = fixed.filter(Boolean);     // always drop nulls before aggregating
+
+// budget reflects the tool's maxCost/maxTokens caps.
+if (budget.exceeded()) return { partial: inputs.length };
+
+// Compose a saved workflow inline (one nesting level; shares this run's
+// concurrency, abort, budget, and agent accounting).
+const sub = await workflow("review-sweep", { target: "src/auth" });
+
 return { summary: inputs.length };        // return value becomes the tool result
 ```
+
+Scripts must be deterministic so runs can resume: `Date.now()`, `Math.random()`, and
+zero-arg `new Date()` throw in the sandbox — pass timestamps or seeds in via `args`.
+
+### Saved workflows
+
+Drop reusable scripts in `~/.pi/agent/workflows/*.js` (user) or `<project>/.pi/workflows/*.js`
+(project; overrides user on name collision). The file name is the workflow name; a leading
+`//` comment is its description, shown in the `/workflow` brief. Run them via the
+`workflowName` tool parameter or compose them from a script with `workflow(name, args)`.
+
+### Resume
+
+Every run writes a journal to `~/.pi/agent/pi-dynamic-workflow/runs/<runId>.json`
+(successful agent calls only, keyed by a hash of prompt + behavioral options; the 50
+newest runs are kept). Re-invoking the tool with `resumeFromRunId` replays matching
+calls from cache — shown with a `↺` icon, free of budget — and only runs what changed.
+
+### Background runs
+
+`background: true` makes the tool return immediately with the run id; the run continues
+detached and injects a `workflow-complete` message (triggering a turn) when it finishes.
+Stop one early with `/workflow-stop <runId>` (no argument lists active runs). Background
+runs die with the pi process, but their journal makes them resumable.
 
 ## Design rules
 
@@ -89,6 +135,8 @@ return { summary: inputs.length };        // return value becomes the tool resul
 5. **Scale to what the user asked for.** A two-step task needs two agents, not a judge panel. Reserve heavy patterns for tasks that demand rigor.
 6. **Concurrency is capped** (default `max(2, min(8, cpus - 2))`); you may launch many agents and let the scheduler queue them. Set `maxConcurrency` lower for heavy tasks.
 7. **Restrict tools** for read-only analysis agents (`tools: ["read","grep","find","ls"]`) so they cannot mutate the repo.
+8. **Set `timeout` on agents that could wander** and `maxCost`/`maxTokens` on expensive fan-outs; a timed-out agent resolves to null like any other failure.
+9. **Use `background: true` for long runs** the user shouldn't wait on; report the run id so it can be stopped (`/workflow-stop`) or resumed later.
 
 ### Quality patterns (use when rigor matters)
 
@@ -101,7 +149,7 @@ return { summary: inputs.length };        // return value becomes the tool resul
 
 The script is the session LLM's, not untrusted user input. The `node:vm` sandbox provides isolation hygiene, not a security boundary — treat it as an execution context for code the same model wrote, not a jail.
 
-To prevent the obvious failure mode (a script that spawns subagents that spawn workflows that spawn…), nested subagent depth is capped at 3.
+To prevent the obvious failure mode (a script that spawns subagents that spawn workflows that spawn…), nested subagent depth is capped at 3, total `agent()` calls per run at 200, and in-script `workflow()` composition at one nesting level.
 
 ## Development
 

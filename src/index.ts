@@ -10,11 +10,13 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { WORKFLOW_GUIDE } from "./guide.ts";
-import { workflowTool } from "./tool.ts";
+import { discoverWorkflows } from "./registry.ts";
+import { createWorkflowTool, listActiveWorkflowRuns, stopWorkflowRun, WORKFLOW_COMPLETE_TYPE } from "./tool.ts";
 
 const BRIEF_TYPE = "dynamic-workflow-brief";
 
 export default function (pi: ExtensionAPI) {
+	const workflowTool = createWorkflowTool(pi);
 	let toolRegistered = false;
 
 	const ensureToolRegistered = () => {
@@ -33,16 +35,61 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 			ensureToolRegistered();
+			const sections = [WORKFLOW_GUIDE];
+			const saved = discoverWorkflows(ctx.cwd);
+			if (saved.size > 0) {
+				const list = [...saved.values()]
+					.map((w) => `- ${w.name} (${w.source})${w.description ? `: ${w.description}` : ""}`)
+					.join("\n");
+				sections.push(
+					`## Saved workflows\n\nWhen one of these fits the task, invoke the tool with \`workflowName\` (plus \`args\`) instead of authoring a script:\n\n${list}`,
+				);
+			}
+			sections.push(`## Task\n\n${task}`);
 			pi.sendMessage(
 				{
 					customType: BRIEF_TYPE,
-					content: `${WORKFLOW_GUIDE}\n\n## Task\n\n${task}`,
+					content: sections.join("\n\n"),
 					display: true,
 					details: { task },
 				},
 				{ triggerTurn: true },
 			);
 		},
+	});
+
+	pi.registerCommand("workflow-stop", {
+		description: "Stop a background workflow run: /workflow-stop <runId>",
+		handler: async (args, ctx) => {
+			const runId = args.trim();
+			if (!runId) {
+				const active = listActiveWorkflowRuns();
+				ctx.ui.notify(
+					active.length > 0
+						? `Active background runs: ${active.join(", ")}. Usage: /workflow-stop <runId>`
+						: "No background workflow runs are active.",
+					"info",
+				);
+				return;
+			}
+			if (stopWorkflowRun(runId)) {
+				ctx.ui.notify(`Aborting background workflow run ${runId}`, "info");
+			} else {
+				ctx.ui.notify(`No active background run "${runId}"`, "warning");
+			}
+		},
+	});
+
+	pi.registerMessageRenderer(WORKFLOW_COMPLETE_TYPE, (message, { expanded }, theme) => {
+		const content = String(message.content);
+		if (expanded) return new Text(theme.fg("muted", content), 0, 0);
+		const firstLine = content.split("\n")[0] ?? "";
+		return new Text(theme.fg("accent", "workflow complete ") + theme.fg("dim", firstLine), 0, 0);
+	});
+
+	// Background runs must not outlive the session that owns their subprocesses.
+	pi.on("session_shutdown", () => {
+		for (const runId of listActiveWorkflowRuns()) stopWorkflowRun(runId);
 	});
 
 	pi.registerMessageRenderer<{ task?: string }>(BRIEF_TYPE, (message, { expanded }, theme) => {

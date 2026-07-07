@@ -118,6 +118,46 @@ test("--tools restriction is passed through unchanged without a schema", async (
 	assert.ok(!args.includes("-e"));
 });
 
+test("timeout kills the subprocess and reports a non-abort failure", async () => {
+	process.env.FAKE_PI_MODE = "sleep";
+	const start = Date.now();
+	const result = await runSubagent({ prompt: "anything", cwd, timeoutMs: 200 });
+	assert.ok(Date.now() - start < 5000, "should not wait out the 30s sleep");
+	assert.strictEqual(result.ok, false);
+	assert.strictEqual(result.aborted, false, "timeout must not masquerade as abort");
+	assert.match(result.errorMessage ?? "", /timed out after 200ms/);
+});
+
+test("systemPrompt is passed as --system-prompt text", async () => {
+	process.env.FAKE_PI_MODE = "ok";
+	const args = await capturedArgs({ prompt: "anything", cwd, systemPrompt: "you are terse" });
+	const idx = args.indexOf("--system-prompt");
+	assert.ok(idx >= 0, "--system-prompt flag present");
+	assert.strictEqual(args[idx + 1], "you are terse");
+});
+
+test("appendSystemPrompt entries become --append-system-prompt temp files, in order", async () => {
+	process.env.FAKE_PI_MODE = "ok";
+	// Capture args manually: the temp prompt files are deleted after the run,
+	// so their contents must be read by the stub-side argv snapshot... they are
+	// paths, so assert flag count and that files existed by writing a copy mode.
+	const argsFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "fake-pi-args-")), "args.json");
+	process.env.FAKE_PI_ARGS_FILE = argsFile;
+	process.env.FAKE_PI_COPY_APPEND_PROMPTS = "1";
+	try {
+		await runSubagent({ prompt: "anything", cwd, appendSystemPrompt: ["first extra", "second extra"] });
+		const args: string[] = JSON.parse(fs.readFileSync(argsFile, "utf-8"));
+		const paths = args.flatMap((a, i) => (a === "--append-system-prompt" ? [args[i + 1] as string] : []));
+		assert.strictEqual(paths.length, 2);
+		// The stub copied each prompt file's contents before the parent cleaned up.
+		const copied: string[] = JSON.parse(fs.readFileSync(`${argsFile}.prompts`, "utf-8"));
+		assert.deepStrictEqual(copied, ["first extra", "second extra"]);
+	} finally {
+		delete process.env.FAKE_PI_COPY_APPEND_PROMPTS;
+		fs.rmSync(path.dirname(argsFile), { recursive: true, force: true });
+	}
+});
+
 test("abort signal terminates the subprocess", async () => {
 	process.env.FAKE_PI_MODE = "sleep";
 	const controller = new AbortController();

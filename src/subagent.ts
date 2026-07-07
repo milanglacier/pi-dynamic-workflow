@@ -5,6 +5,7 @@
 
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
 import { createStructuredOutputExtension, EMIT_RESULT_TOOL } from "./structured.ts";
@@ -17,6 +18,12 @@ export interface SubagentRequest {
 	cwd: string;
 	schema?: Record<string, unknown>;
 	signal?: AbortSignal;
+	/** Wall-clock cap in ms; on expiry the subprocess is killed and the result is a non-abort failure. */
+	timeoutMs?: number;
+	/** Replaces the subagent's system prompt (`pi --system-prompt`). */
+	systemPrompt?: string;
+	/** Appended to the system prompt in order (`pi --append-system-prompt`, via temp files). */
+	appendSystemPrompt?: string[];
 	/** Called on each parsed event so the parent can stream progress. */
 	onEvent?: (update: SubagentProgress) => void;
 }
@@ -97,7 +104,7 @@ function lastEmitResultArguments(messages: Message[]): unknown {
 }
 
 export async function runSubagent(request: SubagentRequest): Promise<SubagentResult> {
-	const { prompt, model, tools, cwd, schema, signal, onEvent } = request;
+	const { prompt, model, tools, cwd, schema, signal, timeoutMs, systemPrompt, appendSystemPrompt, onEvent } = request;
 
 	// Hard recursion guard: a subagent that itself spawns workflows could
 	// otherwise multiply subprocesses without bound.
@@ -119,6 +126,19 @@ export async function runSubagent(request: SubagentRequest): Promise<SubagentRes
 		const toolList = schema ? [...new Set([...tools, EMIT_RESULT_TOOL])] : tools;
 		args.push("--tools", toolList.join(","));
 	}
+	if (systemPrompt) args.push("--system-prompt", systemPrompt);
+
+	// --append-system-prompt accepts text or a file path; prompt text that
+	// happens to look like a path would be misread, so always pass a temp file.
+	let promptDir: string | null = null;
+	if (appendSystemPrompt && appendSystemPrompt.length > 0) {
+		promptDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-workflow-sysprompt-"));
+		appendSystemPrompt.forEach((text, i) => {
+			const promptPath = path.join(promptDir as string, `append-${i}.md`);
+			fs.writeFileSync(promptPath, text, "utf-8");
+			args.push("--append-system-prompt", promptPath);
+		});
+	}
 
 	let structuredExt: Awaited<ReturnType<typeof createStructuredOutputExtension>> | null = null;
 	if (schema) {
@@ -137,6 +157,7 @@ export async function runSubagent(request: SubagentRequest): Promise<SubagentRes
 		aborted: false,
 	};
 	let stderr = "";
+	let timedOut = false;
 
 	try {
 		result.exitCode = await new Promise<number>((resolve) => {
@@ -197,7 +218,26 @@ export async function runSubagent(request: SubagentRequest): Promise<SubagentRes
 				stderr += data.toString();
 			});
 
+			// NOTE: `proc.killed` only means a signal was *sent*, so it cannot
+			// detect a child that ignores SIGTERM; check exit status instead.
+			const terminate = () => {
+				proc.kill("SIGTERM");
+				setTimeout(() => {
+					if (proc.exitCode === null && proc.signalCode === null) proc.kill("SIGKILL");
+				}, 5000).unref();
+			};
+
+			let timeoutTimer: NodeJS.Timeout | undefined;
+			if (timeoutMs && timeoutMs > 0) {
+				timeoutTimer = setTimeout(() => {
+					timedOut = true;
+					terminate();
+				}, timeoutMs);
+				timeoutTimer.unref();
+			}
+
 			proc.on("close", (code) => {
+				if (timeoutTimer) clearTimeout(timeoutTimer);
 				if (buffer.trim()) processLine(buffer);
 				resolve(code ?? 0);
 			});
@@ -209,12 +249,7 @@ export async function runSubagent(request: SubagentRequest): Promise<SubagentRes
 			if (signal) {
 				const killProc = () => {
 					result.aborted = true;
-					proc.kill("SIGTERM");
-					// NOTE: `proc.killed` only means a signal was *sent*, so it cannot
-					// detect a child that ignores SIGTERM; check exit status instead.
-					setTimeout(() => {
-						if (proc.exitCode === null && proc.signalCode === null) proc.kill("SIGKILL");
-					}, 5000).unref();
+					terminate();
 				};
 				if (signal.aborted) killProc();
 				else signal.addEventListener("abort", killProc, { once: true });
@@ -222,12 +257,20 @@ export async function runSubagent(request: SubagentRequest): Promise<SubagentRes
 		});
 	} finally {
 		structuredExt?.cleanup();
+		if (promptDir) fs.rmSync(promptDir, { recursive: true, force: true });
 	}
 
 	result.outputText = lastAssistantText(messages);
 
 	if (result.aborted) {
 		result.errorMessage ??= "Subagent aborted";
+		return result;
+	}
+
+	// A timed-out child dies via SIGTERM (close code null → 0), so without this
+	// check it could masquerade as a successful run with partial output.
+	if (timedOut) {
+		result.errorMessage = `Subagent timed out after ${timeoutMs}ms`;
 		return result;
 	}
 

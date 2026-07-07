@@ -12,6 +12,16 @@ function makeHooks(overrides: Partial<ScriptHooks> = {}): ScriptHooks {
 		phase: () => {},
 		log: () => {},
 		args: undefined,
+		budget: {
+			maxCost: null,
+			maxTokens: null,
+			spentCost: () => 0,
+			spentTokens: () => 0,
+			remainingCost: () => Infinity,
+			remainingTokens: () => Infinity,
+			exceeded: () => false,
+		},
+		workflow: async () => null,
 		...overrides,
 	};
 }
@@ -86,6 +96,42 @@ test("sandbox does not lexically expose require or process", async () => {
 		makeHooks(),
 	);
 	assert.strictEqual(JSON.stringify(value), JSON.stringify({ req: "undefined", proc: "undefined" }));
+});
+
+test("determinism guards: Date.now, Math.random, and bare new Date throw", async () => {
+	for (const expr of ["Date.now()", "Math.random()", "new Date()", "Date()"]) {
+		await assert.rejects(
+			runWorkflowScript(`return ${expr};`, makeHooks()),
+			(err: unknown) => err instanceof WorkflowScriptError && /deterministic/.test((err as Error).message),
+			`${expr} should be blocked`,
+		);
+	}
+});
+
+test("determinism guards: explicit Date args and other Math members still work", async () => {
+	const value = await runWorkflowScript(
+		`return { year: new Date(0).getUTCFullYear(), floor: Math.floor(1.9), parsed: Date.parse("1970-01-01T00:00:00Z") };`,
+		makeHooks(),
+	);
+	assert.strictEqual(JSON.stringify(value), JSON.stringify({ year: 1970, floor: 1, parsed: 0 }));
+});
+
+test("budget global is visible to the script", async () => {
+	const value = await runWorkflowScript(
+		`return { max: budget.maxCost, left: budget.remainingCost(), over: budget.exceeded() };`,
+		makeHooks({
+			budget: {
+				maxCost: 2,
+				maxTokens: null,
+				spentCost: () => 0.5,
+				spentTokens: () => 0,
+				remainingCost: () => 1.5,
+				remainingTokens: () => Infinity,
+				exceeded: () => false,
+			},
+		}),
+	);
+	assert.strictEqual(JSON.stringify(value), JSON.stringify({ max: 2, left: 1.5, over: false }));
 });
 
 test("top-level busy loop hits the sync-slice timeout", async () => {

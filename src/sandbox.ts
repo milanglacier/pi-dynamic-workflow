@@ -24,6 +24,41 @@ export class WorkflowScriptError extends Error {
  */
 const SYNC_SLICE_TIMEOUT_MS = 5000;
 
+/**
+ * Determinism guards: scripts must produce the same agent() call sequence on
+ * every run so a resumed run can replay cached results. Wall-clock and
+ * randomness would silently break that, so they throw with guidance instead.
+ */
+function blocked(name: string): () => never {
+	return () => {
+		throw new Error(
+			`${name} is blocked in workflow scripts: runs must be deterministic so they can be resumed. ` +
+				"Pass timestamps or random seeds in via `args` instead.",
+		);
+	};
+}
+
+const guardedMath = new Proxy(Math, {
+	get(target, prop, receiver) {
+		if (prop === "random") return blocked("Math.random()");
+		return Reflect.get(target, prop, receiver);
+	},
+});
+
+const guardedDate = new Proxy(Date, {
+	construct(target, argArray, newTarget) {
+		if (argArray.length === 0) blocked("new Date() without arguments")();
+		return Reflect.construct(target, argArray, newTarget);
+	},
+	get(target, prop, receiver) {
+		if (prop === "now") return blocked("Date.now()");
+		return Reflect.get(target, prop, receiver);
+	},
+	apply() {
+		return blocked("Date()")();
+	},
+});
+
 /** Run a plain async JS body with the hooks in scope. Returns the script's return value. */
 export async function runWorkflowScript(
 	source: string,
@@ -50,9 +85,14 @@ export async function runWorkflowScript(
 		phase: hooks.phase,
 		log: hooks.log,
 		args: hooks.args,
+		budget: hooks.budget,
+		workflow: hooks.workflow,
 		console: sandboxConsole,
 		setTimeout,
 		clearTimeout,
+		// Shadow the context's realm intrinsics with the determinism guards.
+		Math: guardedMath,
+		Date: guardedDate,
 	});
 
 	let script: vm.Script;
