@@ -22,7 +22,178 @@ For local development, drop the path into your `~/.pi/agent/settings.json`:
 }
 ```
 
-## Usage
+## User Guide
+
+### When to reach for `/workflow`
+
+`/workflow` shines when a task benefits from **independent parallel work** or **multi-stage pipelines with quality gates**. Good fits:
+
+- **Auditing or reviewing** across multiple files, lenses, or criteria (security, correctness, style).
+- **Batch transformations** where each file/item flows through the same pipeline (scan → fix → verify).
+- **Research or comparison** that needs multiple perspectives synthesized by a judge.
+- **Any task where you'd otherwise say** "do the same thing to each of these" or "check my work from a different angle."
+
+Not every task needs an orchestra. A single-file edit or a straightforward question is better handled directly — the overhead of spawning subagents isn't worth it for a one-step job.
+
+### Prompting the agent
+
+The LLM decides what script to write and how to structure the workflow. You steer it with natural language in your `/workflow` prompt. Here are the levers you can pull:
+
+#### Pick a quality pattern
+
+Tell the agent which pattern to use by name:
+
+```
+/workflow review src/auth.ts using the adversarial verify pattern
+/workflow audit the API layer — use a judge panel with 3 reviewers
+/workflow scan the codebase for bugs — multi-angle sweep: correctness, security, and performance
+```
+
+The agent knows these patterns from its authoring brief. If you don't name one, it picks what fits the task. See the [Quality patterns](#quality-patterns) reference for what each one does.
+
+#### Set a spending cap
+
+```
+/workflow audit every module — cap spending at $2
+/workflow review the entire codebase with a budget of 50k tokens
+```
+
+This sets `maxCost` or `maxTokens` on the tool call. The script gets a `budget` object it can check — once exceeded, new `agent()` calls throw a `BudgetExceededError`. In-flight agents still finish, so you get partial results rather than nothing.
+
+#### Control concurrency
+
+```
+/workflow review all 40 services — limit to 4 at a time
+```
+
+Sets `maxConcurrency`. Useful when you're hitting rate limits or don't want to saturate your machine. The default is `max(2, min(8, cpus - 2))`.
+
+#### Run in the background
+
+```
+/workflow audit the entire monorepo — run this in the background
+```
+
+Sets `background: true`. The tool returns immediately and the workflow keeps running detached. A notification message arrives when it finishes (triggering a new turn). Stop it early with `/workflow-stop <runId>` (no argument lists active runs).
+
+#### Use a custom agent type
+
+If you've defined agent types (see [Configuring agent types](#configuring-agent-types)), ask the LLM to use them:
+
+```
+/workflow review the PR — use my security-reviewer and style-checker agent types
+```
+
+The LLM will set `agentType` on the relevant `agent()` calls. Each agent type brings its own system prompt, default model, and tool restrictions.
+
+#### Restrict what subagents can do
+
+```
+/workflow audit the codebase — all subagents should be read-only
+```
+
+The LLM will set `tools: ["read", "grep", "find", "ls"]` on `agent()` calls so subagents can't modify files.
+
+#### Resume a previous run
+
+If a run crashed or you want to re-run with small changes, ask the agent to resume:
+
+```
+/workflow re-run my last audit but add a performance lens — resume from the previous run
+```
+
+Changed prompts re-run; unchanged ones replay from cache instantly (free, marked with ↺). See [Resume](#resume) for how this works under the hood.
+
+#### Compose with saved workflows
+
+```
+/workflow pipeline: first run my review-sweep on src/, then aggregate the findings
+```
+
+If you have saved workflows (see [Creating saved workflows](#creating-saved-workflows)), the agent can compose them inline.
+
+### Quick reference: all the knobs
+
+| What you want                       | How to say it in a `/workflow` prompt                                       |
+| ----------------------------------- | --------------------------------------------------------------------------- |
+| Use a quality pattern               | `... using the judge panel pattern`                                         |
+| Cap spending                        | `... with a $3 budget` or `... cap at 100k tokens`                          |
+| Limit parallelism                   | `... limit to 4 concurrent agents`                                          |
+| Run detached                        | `... in the background`                                                     |
+| Use a custom agent type             | `... use my security-reviewer`                                              |
+| Read-only subagents                 | `... all subagents should be read-only`                                     |
+| Resume a prior run                  | `... resume from the previous run`                                          |
+| Compose saved workflows             | `... first run my review-sweep, then aggregate`                             |
+| Set per-agent timeout               | `... give each subagent at most 2 minutes`                                  |
+| Structured output from subagents    | `... each subagent should return JSON with {severity, summary}`             |
+
+### Configuring agent types
+
+Agent types are reusable subagent profiles — like preset characters with their own system prompt, default model, and tool set. Define them as markdown files:
+
+**Location:** `~/.pi/agent/agents/*.md` (global) or `<project>/.pi/agents/*.md` (per-project; overrides global on name collision).
+
+**Format:** YAML frontmatter for metadata; the body is the system prompt.
+
+```markdown
+---
+name: security-reviewer
+description: Reviews code for security issues with an adversarial mindset
+tools: read, grep, find, ls
+model: sonnet
+---
+You are a security reviewer. For every file you examine:
+1. Identify all trust boundaries (user input, network, filesystem, DB).
+2. Trace data flow across each boundary.
+3. Flag any missing validation, sanitization, or authorization.
+4. Suggest concrete fixes with code examples.
+
+Be concise. Your final message should be a bulleted list of findings
+with severity (critical/high/medium/low) and a one-line recommendation.
+```
+
+**Frontmatter fields:**
+
+| Field         | Required | Description                                                                  |
+| ------------- | -------- | ---------------------------------------------------------------------------- |
+| `name`        | Yes      | Identifier used in `agentType` (kebab-case recommended)                      |
+| `description` | Yes      | Shown in the `/workflow` brief so the LLM knows when to reach for it         |
+| `tools`       | No       | Comma-separated tool list (e.g. `read, grep, find`). Omit to grant all tools |
+| `model`       | No       | Model override for this agent type (e.g. `haiku`, `sonnet`)                  |
+
+Once defined, the LLM can use them via `agent("...", { agentType: "security-reviewer" })`. Changing an agent type's `.md` file invalidates cached results for runs that used it — so resume will re-run those calls live.
+
+### Creating saved workflows
+
+If you find yourself repeating the same orchestration pattern, save it as a reusable script:
+
+**Location:** `~/.pi/agent/workflows/*.js` (global) or `<project>/.pi/workflows/*.js` (per-project; overrides global on name collision).
+
+**Format:** A `.js` file whose name is the workflow name. The first line, if a `//` comment, is its description (shown in the `/workflow` brief). The body is the same async JS you'd write inline — `agent()`, `parallel()`, `pipeline()`, `args`, etc. are all in scope.
+
+```js
+// Scan every file in a directory for a specific issue and report findings
+const files = await agent(
+  `List every .ts file under ${args.dir || "src/"}. Output one path per line.`,
+  { label: "list-files", tools: ["find"], schema: { type: "array", items: { type: "string" } } }
+);
+if (!files || files.length === 0) return { findings: [], message: "No files found" };
+
+const results = await parallel(
+  files.map(f => () =>
+    agent(`Scan ${f} for ${args.issue || "hardcoded secrets"}. Report findings concisely.`,
+      { label: `scan-${f}`, phase: "scan", tools: ["read", "grep"] }
+    )
+  )
+);
+
+const findings = results.filter(Boolean);
+return { count: findings.length, findings };
+```
+
+**Usage:** Reference it from a prompt (`/workflow run my scan-sweep on src/auth`) or compose it inline from another script (`workflow("scan-sweep", { dir: "src/auth", issue: "SQL injection" })`).
+
+## Reference
 
 ### `/workflow` command
 
@@ -30,7 +201,7 @@ For local development, drop the path into your `~/.pi/agent/settings.json`:
 /workflow review the auth module for security issues across 3 lenses
 ```
 
-This injects a brief into the next turn. The LLM plans phases, calls the `workflow` tool with a `script` parameter, and the orchestration runs.
+This injects the authoring brief into the next turn. The LLM plans phases, calls the `workflow` tool with a `script` parameter, and the orchestration runs.
 
 ### The `workflow` tool
 
@@ -105,12 +276,9 @@ return { summary: inputs.length };        // return value becomes the tool resul
 Scripts must be deterministic so runs can resume: `Date.now()`, `Math.random()`, and
 zero-arg `new Date()` throw in the sandbox — pass timestamps or seeds in via `args`.
 
-### Saved workflows
+### Saved workflows (technical)
 
-Drop reusable scripts in `~/.pi/agent/workflows/*.js` (user) or `<project>/.pi/workflows/*.js`
-(project; overrides user on name collision). The file name is the workflow name; a leading
-`//` comment is its description, shown in the `/workflow` brief. Run them via the
-`workflowName` tool parameter or compose them from a script with `workflow(name, args)`.
+Saved workflows are discovered from `~/.pi/agent/workflows/*.js` (user) and `<project>/.pi/workflows/*.js` (project; overrides user on name collision). The file name (minus `.js`) is the workflow name; a leading `//` comment is its description. Run them via the `workflowName` tool parameter or compose them from a script with `workflow(name, args)`. See [Creating saved workflows](#creating-saved-workflows) for a step-by-step example.
 
 ### Resume
 
@@ -128,7 +296,9 @@ detached and injects a `workflow-complete` message (triggering a turn) when it f
 Stop one early with `/workflow-stop <runId>` (no argument lists active runs). Background
 runs die with the pi process, but their journal makes them resumable.
 
-## Design rules
+### Design rules
+
+These are the rules the LLM follows when authoring workflow scripts. They're also a good mental model for understanding how workflows behave.
 
 1. **Pipeline by default.** Only add a barrier (sequential `parallel` batches) when a stage genuinely needs to see all items at once (e.g. cross-file dedup, global ranking). Independent per-item work should flow through `pipeline` so fast items don't wait for slow ones.
 2. **Null-filter religiously.** `agent()`, `parallel()`, and `pipeline()` all yield `null` for failures. `.filter(Boolean)` before joining or aggregating.
@@ -140,7 +310,9 @@ runs die with the pi process, but their journal makes them resumable.
 8. **Set `timeout` on agents that could wander** and `maxCost`/`maxTokens` on expensive fan-outs; a timed-out agent resolves to null like any other failure.
 9. **Use `background: true` for long runs** the user shouldn't wait on; report the run id so it can be stopped (`/workflow-stop`) or resumed later.
 
-### Quality patterns (use when rigor matters)
+### Quality patterns
+
+Patterns the LLM can use when a task demands rigor. Name them in your prompt to steer the agent (see [Prompting the agent](#prompting-the-agent)).
 
 - **Adversarial verify:** producer agent creates, verifier agent (different prompt, fresh context) checks against explicit criteria; loop or fix on failure.
 - **Loop until clean:** `while` a checker agent reports issues (bounded iterations, e.g. 3), run a fixer agent on the report.
