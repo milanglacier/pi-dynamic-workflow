@@ -1,8 +1,9 @@
 name: Publish to npm
 
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - "v*"
 
 permissions:
   contents: read
@@ -10,11 +11,11 @@ permissions:
 
 jobs:
   publish:
-    name: Publish release
+    name: Publish tag
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check out release tag
+      - name: Check out tag
         uses: actions/checkout@v6
 
       - name: Set up Node.js
@@ -24,12 +25,12 @@ jobs:
           registry-url: https://registry.npmjs.org/
           package-manager-cache: false
 
-      - name: Verify release tag matches package version
+      - name: Verify tag matches package version
         shell: bash
         run: |
           package_version="$(node -p "require('./package.json').version")"
           if [[ "${GITHUB_REF_NAME}" != "v${package_version}" ]]; then
-            echo "Release tag ${GITHUB_REF_NAME} does not match package version v${package_version}." >&2
+            echo "Tag ${GITHUB_REF_NAME} does not match package version v${package_version}." >&2
             exit 1
           fi
 
