@@ -1,6 +1,6 @@
 {
 	"name": "pi-dynamic-workflow",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "Dynamic workflow orchestration for pi: the LLM authors a JS orchestration script that fans out isolated pi subagent sessions",
 	"type": "module",
 	"author": {
@@ -30,7 +30,9 @@
 		"src"
 	],
 	"pi": {
-		"extensions": ["./src/index.ts"]
+		"extensions": [
+			"./src/index.ts"
+		]
 	},
 	"scripts": {
 		"prepublishOnly": "npm run typecheck",
