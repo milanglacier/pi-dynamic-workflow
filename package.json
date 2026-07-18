@@ -3,14 +3,41 @@
 	"version": "0.1.0",
 	"description": "Dynamic workflow orchestration for pi: the LLM authors a JS orchestration script that fans out isolated pi subagent sessions",
 	"type": "module",
+	"author": {
+		"name": "milanglacier",
+		"url": "https://github.com/milanglacier"
+	},
 	"license": "MIT",
-	"keywords": ["pi-package"],
+	"homepage": "https://github.com/milanglacier/pi-dynamic-workflow#readme",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/milanglacier/pi-dynamic-workflow.git"
+	},
+	"bugs": {
+		"url": "https://github.com/milanglacier/pi-dynamic-workflow/issues"
+	},
+	"keywords": [
+		"pi-package",
+		"pi-coding-agent",
+		"multi-agent",
+		"workflow",
+		"orchestration",
+		"ai-agents"
+	],
+	"files": [
+		"src"
+	],
 	"pi": {
 		"extensions": ["./src/index.ts"]
 	},
 	"scripts": {
+		"prepublishOnly": "npm run typecheck",
 		"typecheck": "tsc --noEmit",
 		"test": "node --test \"test/*.test.ts\""
+	},
+	"publishConfig": {
+		"access": "public",
+		"registry": "https://registry.npmjs.org/"
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-agent-core": "*",

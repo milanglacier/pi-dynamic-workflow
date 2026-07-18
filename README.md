@@ -8,7 +8,13 @@ The session LLM receives an authoring brief, writes a small async JS body that c
 
 ## Install
 
-The package is not on npm yet. Install from the GitHub repository:
+Install from npm with pi's package manager:
+
+```bash
+pi install npm:pi-dynamic-workflow
+```
+
+Or install directly from the GitHub repository:
 
 ```bash
 pi install git:github.com/milanglacier/pi-dynamic-workflow
