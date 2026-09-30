@@ -45,10 +45,10 @@
 		"registry": "https://registry.npmjs.org/"
 	},
 	"peerDependencies": {
-		"@earendil-works/pi-agent-core": "*",
-		"@earendil-works/pi-ai": "*",
-		"@earendil-works/pi-coding-agent": ">=0.86.0 <=0.100.0",
-		"@earendil-works/pi-tui": "*",
+		"@earendil-works/pi-agent-core": "<=0.120.0",
+		"@earendil-works/pi-ai": "<=0.120.0",
+		"@earendil-works/pi-coding-agent": ">=0.86.0 <=0.120.0",
+		"@earendil-works/pi-tui": "<=0.120.0",
 		"typebox": "*"
 	},
 	"devDependencies": {

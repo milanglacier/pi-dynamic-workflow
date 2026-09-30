@@ -8,7 +8,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { after, afterEach, before, test } from "node:test";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { createToolContext } from "./tool-context.ts";
 import { discoverWorkflows, loadWorkflowSource } from "../src/registry.ts";
 import { createWorkflowTool } from "../src/tool.ts";
 import { installFakePi } from "./fake-pi.ts";
@@ -52,9 +52,7 @@ function makeProject(workflows: Record<string, string>): { dir: string; cleanup(
 	return { dir, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
 }
 
-function ctxFor(dir: string): ExtensionContext {
-	return { cwd: dir, hasUI: false } as unknown as ExtensionContext;
-}
+const ctxFor = createToolContext;
 
 test("discoverWorkflows finds project workflows with descriptions, walking up from a subdir", () => {
 	const proj = makeProject({

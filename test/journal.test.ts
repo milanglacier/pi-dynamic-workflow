@@ -8,7 +8,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { after, afterEach, before, test } from "node:test";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { createToolContext } from "./tool-context.ts";
 import { agentCallHash, buildResumeCache, journalPath, loadJournal, type RunJournal } from "../src/journal.ts";
 import { createWorkflowTool } from "../src/tool.ts";
 import { installFakePi } from "./fake-pi.ts";
@@ -17,7 +17,7 @@ const workflowTool = createWorkflowTool();
 
 let fakePi: ReturnType<typeof installFakePi>;
 let agentDir: string;
-const ctx = { cwd: os.tmpdir(), hasUI: false } as unknown as ExtensionContext;
+const ctx = createToolContext(os.tmpdir());
 
 before(() => {
 	fakePi = installFakePi();
@@ -193,7 +193,7 @@ test("resume after an agent-definition edit runs live instead of replaying stale
 			path.join(agentsDir, "reviewer.md"),
 			`---\nname: reviewer\ndescription: reviews code\n---\n${prompt}\n`,
 		);
-	const projCtx = { cwd: projDir, hasUI: false } as unknown as ExtensionContext;
+	const projCtx = createToolContext(projDir);
 	const script = `return await agent("check", { agentType: "reviewer" });`;
 	try {
 		writeDef("Be strict.");

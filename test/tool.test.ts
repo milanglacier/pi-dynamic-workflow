@@ -8,7 +8,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { after, afterEach, before, test } from "node:test";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { createToolContext } from "./tool-context.ts";
 import { WorkflowScriptError } from "../src/sandbox.ts";
 import { createWorkflowTool, stopWorkflowRun } from "../src/tool.ts";
 import type { WorkflowDetails } from "../src/types.ts";
@@ -18,7 +18,7 @@ const workflowTool = createWorkflowTool();
 
 let fakePi: ReturnType<typeof installFakePi>;
 let agentDir: string;
-const ctx = { cwd: os.tmpdir(), hasUI: false } as unknown as ExtensionContext;
+const ctx = createToolContext(os.tmpdir());
 
 before(() => {
 	fakePi = installFakePi();
