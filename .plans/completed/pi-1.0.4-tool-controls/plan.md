@@ -1,6 +1,6 @@
 # Pi 1.0.4 subagent tool controls
 
-Status: Implemented on `feat/pi-1.0.4-tool-controls`. Verification and review passed.
+Status: Completed. Verification and review passed.
 
 ## Goal
 
@@ -53,7 +53,7 @@ Test new observable behavior or guard against regressions in behavior supported 
 - Updated documentation with concise model-facing additions and raised the Pi minimum to `1.0.4`. Read-only examples and profiles include `codemode` for configured MCP access; disablement remains opt-in.
 - `npm run typecheck`, all 87 process-capped tests, and `git diff --check` passed. Package dry-run includes the shared module.
 - Removed the redundant read-only argument test and prompt-content assertion. Recorded behavioral testing guidance in `AGENTS.md`.
-- Final code review found no issues. The monorepo gitlink remains unchanged while this work is on a feature branch.
+- Final code review found no issues; see `review.md`.
 
 ## Confirmed decisions
 
