@@ -58,6 +58,19 @@ test("agentCallHash changes when the resolved agentType definition changes", () 
 	assert.notStrictEqual(v1, agentCallHash("p", opts, { systemPrompt: "Be strict.", tools: ["read"], model: "m2" }));
 });
 
+test("agentCallHash includes script and profile tool controls", () => {
+	const baseline = agentCallHash("p", {});
+	for (const opts of [{ noMcp: true }, { noMcp: false }, { excludeTools: [] }, { excludeTools: ["write"] }]) {
+		assert.notStrictEqual(agentCallHash("p", opts), baseline);
+		assert.strictEqual(agentCallHash("p", opts), agentCallHash("p", { ...opts, label: "renamed" }));
+	}
+	const profile = { systemPrompt: "Be strict." };
+	const profileHash = agentCallHash("p", { agentType: "reviewer" }, profile);
+	for (const controls of [{ noMcp: true }, { noMcp: false }, { excludeTools: [] }, { excludeTools: ["write"] }]) {
+		assert.notStrictEqual(agentCallHash("p", { agentType: "reviewer" }, { ...profile, ...controls }), profileHash);
+	}
+});
+
 test("buildResumeCache groups duplicate hashes into queues", () => {
 	const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
 	const journal: RunJournal = {
@@ -163,6 +176,49 @@ test("resume replays matching calls from cache without spawning; changed calls r
 		ctx,
 	);
 	assert.strictEqual(changed.details.agents[0]?.status, "done");
+});
+
+test("resume replays unchanged tool controls and reruns changed controls", async () => {
+	process.env.FAKE_PI_MODE = "ok";
+	const run = (options: unknown, resumeFromRunId?: string) => workflowTool.execute("resume-controls", {
+		name: "resume-controls", description: "d", args: options,
+		script: `return await agent("stable controls", args);`,
+		...(resumeFromRunId ? { resumeFromRunId } : {}),
+	}, undefined, undefined, ctx);
+	const first = await run({ noMcp: true, excludeTools: ["write"] });
+	const runId = first.details.runId as string;
+	const unchanged = await run({ noMcp: true, excludeTools: ["write"] }, runId);
+	assert.strictEqual(unchanged.details.agents[0]?.status, "cached");
+	for (const options of [{ noMcp: false, excludeTools: ["write"] }, { noMcp: true, excludeTools: ["edit"] }]) {
+		const changed = await run(options, runId);
+		assert.strictEqual(changed.details.agents[0]?.status, "done");
+	}
+});
+
+test("resume reruns calls after profile tool controls change", async () => {
+	process.env.FAKE_PI_MODE = "ok";
+	const projDir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-profile-resume-controls-"));
+	const agentsDir = path.join(projDir, ".pi", "agents");
+	fs.mkdirSync(agentsDir, { recursive: true });
+	const writeProfile = (noMcp: boolean, exclusion: string) => fs.writeFileSync(path.join(agentsDir, "reviewer.md"),
+		`---\nname: reviewer\ndescription: reviews code\nnoMcp: ${noMcp}\nexcludeTools: ${exclusion}\n---\nBe strict.`);
+	const run = (resumeFromRunId?: string) => workflowTool.execute("profile-resume-controls", {
+		name: "profile-resume-controls", description: "d",
+		script: `return await agent("check controls", { agentType: "reviewer" });`,
+		...(resumeFromRunId ? { resumeFromRunId } : {}),
+	}, undefined, undefined, createToolContext(projDir));
+	try {
+		writeProfile(true, "write");
+		const first = await run();
+		const runId = first.details.runId as string;
+		assert.strictEqual((await run(runId)).details.agents[0]?.status, "cached");
+		writeProfile(false, "write");
+		assert.strictEqual((await run(runId)).details.agents[0]?.status, "done");
+		writeProfile(true, "edit");
+		assert.strictEqual((await run(runId)).details.agents[0]?.status, "done");
+	} finally {
+		fs.rmSync(projDir, { recursive: true, force: true });
+	}
 });
 
 test("resume with an unknown runId logs and runs everything live", async () => {

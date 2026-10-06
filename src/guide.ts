@@ -9,7 +9,7 @@
 export const WORKFLOW_TOOL_DESCRIPTION = [
 	"Execute a deterministic multi-agent workflow you author as a JavaScript script body.",
 	"The script runs in a sandbox with these hooks in scope:",
-	"agent(prompt, {label?, phase?, model?, tools?, cwd?, schema?, timeout?, systemPrompt?, appendSystemPrompt?, agentType?}) spawns an isolated pi subagent and resolves to its final text (or a structured object matching `schema`, a JSON Schema); resolves to null on failure or timeout. agentType names a saved agent definition (.pi/agents/*.md).",
+	"agent(prompt, {label?, phase?, model?, tools?, excludeTools?, noMcp?, cwd?, schema?, timeout?, systemPrompt?, appendSystemPrompt?, agentType?}) spawns an isolated pi subagent and resolves to its final text (or a structured object matching `schema`, a JSON Schema); resolves to null on failure or timeout. agentType names a saved agent definition (.pi/agents/*.md). excludeTools applies after selection; noMcp disables built-in MCP; tools may retain MCP.",
 	"parallel([...thunks]) runs thunks concurrently; failed thunks become null (never rejects).",
 	"pipeline(items, ...stages) flows each item through the stages independently with no cross-item barrier; a throwing stage drops that item to null.",
 	"phase(title) groups subsequent agent() calls under a phase; log(msg) records progress; args is the tool's `args` parameter.",
@@ -51,11 +51,12 @@ const info = await agent("Count the exported functions in src/foo.ts", {
   schema: { type: "object", properties: { count: { type: "number" } }, required: ["count"] },
 });
 
-// Options: label (display name), phase (group), model, tools (e.g. ["read","grep"]),
+// Options: label (display name), phase (group), model, tools (e.g. ["read","grep","codemode"]),
+// excludeTools (names or * patterns excluded after selection), noMcp (disable built-in MCP),
 // cwd (working dir), schema (JSON Schema for structured output), timeout (ms; kills
 // the subagent and resolves null), systemPrompt / appendSystemPrompt, and agentType
 // (a saved agent definition from ~/.pi/agent/agents/*.md or <project>/.pi/agents/*.md
-// supplying its system prompt plus default tools/model).
+// supplying its system prompt plus default tools/excludeTools/noMcp/model).
 const verdict = await agent("Review src/auth.ts for injection bugs", {
   agentType: "security-reviewer",
   timeout: 120000,
@@ -77,7 +78,7 @@ const inputs = fixed.filter(Boolean); // always drop nulls before aggregating
 
 // Budget-aware loop: budget reflects the tool's maxCost/maxTokens caps.
 while (budget.maxCost !== null && budget.remainingCost() > 0.05 && inputs.length < 10) {
-  const more = await agent("Find one more edge case in src/", { tools: ["read","grep"] });
+  const more = await agent("Find one more edge case in src/", { tools: ["read","grep","codemode"] });
   if (more) inputs.push(more);
 }
 
@@ -101,7 +102,7 @@ run id replays unchanged \`agent()\` calls from cache and only re-runs what chan
 4. **Use \`schema\` when you need machine-readable output** (counts, verdicts, lists). Plain text is fine for prose to be aggregated by another agent.
 5. **Scale to what the user asked for.** A two-step task needs two agents, not a judge panel. Reserve heavy patterns for tasks that demand rigor.
 6. **Concurrency is capped** (default max(2, min(8, cpus-2))); you may launch many agents and let the scheduler queue them. Set \`maxConcurrency\` lower for heavy tasks.
-7. **Restrict tools** for read-only analysis agents (\`tools: ["read","grep","find","ls"]\`) so they cannot mutate the repo.
+7. **Restrict tools** for read-only analysis agents (\`tools: ["read","grep","find","ls","codemode"]\`). Include codemode for MCP access; disable MCP only when requested.
 8. **Set \`timeout\` on agents that could wander** and \`maxCost\`/\`maxTokens\` on expensive fan-outs; a timed-out agent resolves to null like any other failure.
 9. **Use \`background: true\` for long runs** the user shouldn't wait on; report the run id so it can be stopped (\`/workflow-stop\`) or resumed later.
 

@@ -71,12 +71,14 @@ function stableStringify(value: unknown): string {
 export function agentCallHash(
 	prompt: string,
 	opts: AgentOptions,
-	resolvedAgentType?: { systemPrompt: string; tools?: string[]; model?: string },
+	resolvedAgentType?: { systemPrompt: string; tools?: string[]; excludeTools?: string[]; noMcp?: boolean; model?: string },
 ): string {
 	const behavioral = {
 		prompt,
 		model: opts.model,
 		tools: opts.tools,
+		excludeTools: opts.excludeTools,
+		noMcp: opts.noMcp,
 		cwd: opts.cwd,
 		schema: opts.schema,
 		systemPrompt: opts.systemPrompt,
@@ -86,6 +88,8 @@ export function agentCallHash(
 			? {
 					systemPrompt: resolvedAgentType.systemPrompt,
 					tools: resolvedAgentType.tools,
+					excludeTools: resolvedAgentType.excludeTools,
+					noMcp: resolvedAgentType.noMcp,
 					model: resolvedAgentType.model,
 				}
 			: undefined,

@@ -346,6 +346,86 @@ test("agentType applies the definition's system prompt, tools, and model", async
 	}
 });
 
+test("agent tool controls inherit profile defaults and honor explicit overrides", async () => {
+	const projDir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-agent-controls-"));
+	const agentsDir = path.join(projDir, ".pi", "agents");
+	fs.mkdirSync(agentsDir, { recursive: true });
+	const argsFile = path.join(projDir, "args.json");
+	process.env.FAKE_PI_ARGS_FILE = argsFile;
+	try {
+		for (const scenario of [
+			{ profileNoMcp: true, options: {}, exclusions: "write,mcp__github__delete_*", noMcp: true },
+			{ profileNoMcp: true, options: { excludeTools: [], noMcp: false }, exclusions: undefined, noMcp: false },
+			{ profileNoMcp: true, options: { excludeTools: ["edit"], noMcp: false }, exclusions: "edit", noMcp: false },
+			{ profileNoMcp: false, options: { noMcp: true }, exclusions: "write,mcp__github__delete_*", noMcp: true },
+		]) {
+			fs.writeFileSync(path.join(agentsDir, "reviewer.md"),
+				`---\nname: reviewer\ndescription: reviews code\ntools: read\nexcludeTools: write, mcp__github__delete_*\nnoMcp: ${scenario.profileNoMcp}\n---\nBe strict.\n`);
+			const result = await workflowTool.execute("controls", {
+				name: "agent-controls", description: "d",
+				script: `return await agent("check", { agentType: "reviewer", ...args });`,
+				args: scenario.options,
+			}, undefined, undefined, createToolContext(projDir));
+			assert.strictEqual(result.details.agents[0]?.status, "done");
+			const args: string[] = JSON.parse(fs.readFileSync(argsFile, "utf-8"));
+			assert.strictEqual(args[args.indexOf("--tools") + 1], "read");
+			const excludedIdx = args.indexOf("--exclude-tools");
+			assert.strictEqual(excludedIdx < 0 ? undefined : args[excludedIdx + 1], scenario.exclusions);
+			assert.strictEqual(args.includes("--no-mcp"), scenario.noMcp);
+		}
+	} finally {
+		delete process.env.FAKE_PI_ARGS_FILE;
+		fs.rmSync(projDir, { recursive: true, force: true });
+	}
+});
+
+test("invalid script tool controls throw before spawning", async () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-invalid-controls-"));
+	const argsFile = path.join(dir, "args.json");
+	process.env.FAKE_PI_ARGS_FILE = argsFile;
+	try {
+		for (const options of [{ noMcp: "false" }, { noMcp: null }, { excludeTools: "write" }, { excludeTools: [1] }]) {
+			const result = await workflowTool.execute("invalid-controls", {
+				name: "invalid-controls", description: "d", args: options,
+				script: `try { await agent("check", args); return "no-error"; } catch (e) { return e.message; }`,
+			}, undefined, undefined, ctx);
+			assert.match(String(result.details.returnValue), /noMcp must be a boolean|excludeTools/);
+			assert.strictEqual(result.details.agents.length, 0);
+			assert.ok(!fs.existsSync(argsFile));
+		}
+	} finally {
+		delete process.env.FAKE_PI_ARGS_FILE;
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("schema rejects profile exclusions of emit_result unless explicitly cleared", async () => {
+	const projDir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-schema-controls-"));
+	const agentsDir = path.join(projDir, ".pi", "agents");
+	fs.mkdirSync(agentsDir, { recursive: true });
+	fs.writeFileSync(path.join(agentsDir, "reviewer.md"),
+		"---\nname: reviewer\ndescription: reviews code\nexcludeTools: emit_*\n---\nBe strict.");
+	const argsFile = path.join(projDir, "args.json");
+	process.env.FAKE_PI_ARGS_FILE = argsFile;
+	process.env.FAKE_PI_MODE = "structured";
+	try {
+		const rejected = await workflowTool.execute("schema-controls", {
+			name: "schema-controls", description: "d",
+			script: `try { await agent("check", { agentType: "reviewer", schema: { type: "object" } }); } catch (e) { return e.message; }`,
+		}, undefined, undefined, createToolContext(projDir));
+		assert.match(String(rejected.details.returnValue), /cannot exclude emit_result/);
+		assert.ok(!fs.existsSync(argsFile));
+		const cleared = await workflowTool.execute("schema-cleared", {
+			name: "schema-cleared", description: "d",
+			script: `return await agent("check", { agentType: "reviewer", schema: { type: "object" }, excludeTools: [] });`,
+		}, undefined, undefined, createToolContext(projDir));
+		assert.deepStrictEqual(cleared.details.returnValue, { answer: 5 });
+	} finally {
+		delete process.env.FAKE_PI_ARGS_FILE;
+		fs.rmSync(projDir, { recursive: true, force: true });
+	}
+});
+
 test("unknown agentType throws a helpful error into the script", async () => {
 	process.env.FAKE_PI_MODE = "ok";
 	const projDir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-agents-none-"));

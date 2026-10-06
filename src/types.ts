@@ -1,5 +1,7 @@
 /** Shared types for the dynamic workflow extension. */
 
+import type { ToolControls } from "./tool-controls.ts";
+
 export interface UsageStats {
 	input: number;
 	output: number;
@@ -66,7 +68,7 @@ export interface WorkflowDetails {
 }
 
 /** Options accepted by the sandboxed `agent()` hook. */
-export interface AgentOptions {
+export interface AgentOptions extends ToolControls {
 	label?: string;
 	phase?: string;
 	model?: string;
@@ -82,8 +84,8 @@ export interface AgentOptions {
 	/**
 	 * Named agent definition resolved from pi's agents convention
 	 * (~/.pi/agent/agents/*.md and <project>/.pi/agents/*.md). Supplies the
-	 * subagent's system prompt (appended) plus default tools/model; explicit
-	 * `tools`/`model` options win.
+	 * subagent's system prompt (appended) plus tool/model defaults; explicit
+	 * call options win.
 	 */
 	agentType?: string;
 }

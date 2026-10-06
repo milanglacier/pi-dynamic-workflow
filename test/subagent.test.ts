@@ -126,6 +126,82 @@ test("--tools restriction is passed through unchanged without a schema", async (
 	assert.ok(!args.includes("-e"));
 });
 
+test("omitted or cleared tool controls preserve Pi's configured defaults", async () => {
+	for (const controls of [{}, { tools: [], excludeTools: [], noMcp: false }]) {
+		const args = await capturedArgs({ prompt: "anything", cwd, ...controls });
+		assert.ok(!args.includes("--tools"));
+		assert.ok(!args.includes("--exclude-tools"));
+		assert.ok(!args.includes("--no-mcp"));
+		assert.ok(!args.includes("--no-tools"));
+	}
+});
+
+test("subagents do not inherit parent CLI tool restrictions", async () => {
+	const originalArgv = process.argv;
+	process.argv = [...originalArgv, "--no-mcp", "--exclude-tools", "write"];
+	try {
+		const args = await capturedArgs({ prompt: "anything", cwd, tools: ["read"] });
+		assert.ok(!args.includes("--no-mcp"));
+		assert.ok(!args.includes("--exclude-tools"));
+		assert.strictEqual(args[args.indexOf("--tools") + 1], "read");
+	} finally {
+		process.argv = originalArgv;
+	}
+});
+
+test("tool patterns and exclusions pass through without expanding the allowlist", async () => {
+	const args = await capturedArgs({
+		prompt: "anything",
+		cwd,
+		tools: ["read", "codemode", "mcp__github__*"],
+		excludeTools: ["write", "mcp__github__delete_*"],
+	});
+	assert.strictEqual(args[args.indexOf("--tools") + 1], "read,codemode,mcp__github__*");
+	assert.strictEqual(args[args.indexOf("--exclude-tools") + 1], "write,mcp__github__delete_*");
+	assert.ok(args.indexOf("--exclude-tools") > args.indexOf("--tools"));
+	assert.ok(!args.includes("--no-mcp"));
+});
+
+test("noMcp disables MCP without changing other tool selection", async () => {
+	const args = await capturedArgs({ prompt: "anything", cwd, tools: ["read"], excludeTools: ["write"], noMcp: true });
+	assert.ok(args.includes("--no-mcp"));
+	assert.strictEqual(args[args.indexOf("--tools") + 1], "read");
+	assert.strictEqual(args[args.indexOf("--exclude-tools") + 1], "write");
+	const defaults = await capturedArgs({ prompt: "anything", cwd, noMcp: true });
+	assert.ok(defaults.includes("--no-mcp"));
+	assert.ok(!defaults.includes("--tools"));
+});
+
+test("structured output keeps emit_result alongside exclusions and MCP disablement", async () => {
+	process.env.FAKE_PI_MODE = "structured";
+	const args = await capturedArgs({
+		prompt: "anything", cwd, tools: ["read"], excludeTools: ["mcp__*", "write"], noMcp: true, schema: { type: "object" },
+	});
+	assert.strictEqual(args[args.indexOf("--tools") + 1], "read,emit_result");
+	assert.strictEqual(args[args.indexOf("--exclude-tools") + 1], "mcp__*,write");
+	assert.ok(args.includes("--no-mcp"));
+	assert.ok(args.includes("-e"));
+});
+
+test("invalid controls and structured-output exclusions reject before spawning", async () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "fake-pi-no-spawn-"));
+	const argsFile = path.join(dir, "args.json");
+	process.env.FAKE_PI_ARGS_FILE = argsFile;
+	try {
+		for (const controls of [
+			{ noMcp: "true" },
+			{ excludeTools: "write" },
+			{ excludeTools: ["emit_result"], schema: { type: "object" } },
+			{ excludeTools: ["*"], schema: { type: "object" } },
+		]) {
+			await assert.rejects(runSubagent({ prompt: "anything", cwd, ...controls } as never), /noMcp|excludeTools/);
+			assert.ok(!fs.existsSync(argsFile), "must not spawn the fake Pi either");
+		}
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test("timeout kills the subprocess and reports a non-abort failure", async () => {
 	process.env.FAKE_PI_MODE = "sleep";
 	const start = Date.now();

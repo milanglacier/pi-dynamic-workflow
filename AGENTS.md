@@ -4,6 +4,18 @@ Pi extension: the LLM authors a JS orchestration script; `agent()` in the script
 
 Tests use `node --test` (zero deps, native TS type stripping). All spawning tests go through the fake `pi` stub in `test/fake-pi.ts` — never the real binary.
 
+## Test scope
+
+Test new observable behavior or guard against regressions in behavior supported by a previous version. Do not add tests merely to confirm internal development iterations, whether they involve implementation, documentation, prompts, or examples.
+
+Bad example: after editing an authoring prompt to mention `codemode`, adding this test solely to confirm the edit:
+
+```ts
+assert.match(WORKFLOW_GUIDE, /"codemode"/);
+```
+
+This test follows a documentation iteration, not new runtime functionality. It confirms the edited example, but does not test whether subagents can call MCP tools.
+
 ## Subprocess safety (learned from a real incident)
 
 This repo once fork-bombed the machine. A smoke test called `runSubagent` directly, and `getPiInvocation` (copied from pi's official subagent example) re-invoked `process.argv[1]` — which was the test harness itself, not pi — causing unbounded recursive self-spawning until memory exhaustion.

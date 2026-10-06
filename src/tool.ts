@@ -20,6 +20,7 @@ import { renderWorkflowCall, renderWorkflowResult } from "./render.ts";
 import { runWorkflowScript, WorkflowAbortError } from "./sandbox.ts";
 import { defaultConcurrency, parallel, pipeline, Semaphore } from "./scheduler.ts";
 import { runSubagent } from "./subagent.ts";
+import { validateToolControls } from "./tool-controls.ts";
 import type { AgentOptions, AgentRecord, ScriptHooks, WorkflowBudget, WorkflowDetails } from "./types.ts";
 import { addUsage, emptyUsage } from "./types.ts";
 
@@ -243,7 +244,13 @@ export const createWorkflowTool = (host: WorkflowToolHost = {}) =>
 
 			agentCounter++;
 			const opts = options ?? {};
+			validateToolControls(opts, Boolean(opts.schema));
 			const agentDef = opts.agentType ? resolveAgentType(opts.agentType) : undefined;
+			const toolControls = {
+				excludeTools: opts.excludeTools ?? agentDef?.excludeTools,
+				noMcp: opts.noMcp ?? agentDef?.noMcp,
+			};
+			validateToolControls(toolControls, Boolean(opts.schema));
 			const phase = opts.phase ?? currentPhase;
 			const callHash = agentCallHash(prompt, opts, agentDef);
 
@@ -310,6 +317,7 @@ export const createWorkflowTool = (host: WorkflowToolHost = {}) =>
 					prompt,
 					...(model ? { model } : {}),
 					...(tools ? { tools } : {}),
+					...toolControls,
 					cwd: opts.cwd ? path.resolve(ctx.cwd, opts.cwd) : ctx.cwd,
 					...(opts.schema ? { schema: opts.schema } : {}),
 					...(opts.systemPrompt ? { systemPrompt: opts.systemPrompt } : {}),

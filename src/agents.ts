@@ -2,7 +2,8 @@
  * Discovery of named agent definitions following pi's agents convention:
  * `~/.pi/agent/agents/*.md` (user) and the nearest `<project>/.pi/agents/*.md`
  * (project, overrides user on name collision). Frontmatter: name, description,
- * tools (comma-separated), model; the markdown body is the system prompt.
+ * tools/excludeTools (comma-separated), noMcp (boolean), model;
+ * the markdown body is the system prompt.
  *
  * Adapted from the official subagent example's discovery code ONLY — its pi
  * invocation logic (`getPiInvocation`) is intentionally not copied; see
@@ -12,8 +13,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { CONFIG_DIR_NAME, getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
+import { type ToolControls, validateToolControls } from "./tool-controls.ts";
 
-export interface AgentTypeConfig {
+export interface AgentTypeConfig extends ToolControls {
 	name: string;
 	description: string;
 	tools?: string[];
@@ -47,6 +49,20 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentTypeCo
 		const { frontmatter, body } = parseFrontmatter<Record<string, string>>(content);
 		if (!frontmatter.name || !frontmatter.description) continue;
 
+		const rawExclusions: unknown = frontmatter.excludeTools;
+		if (rawExclusions !== undefined && typeof rawExclusions !== "string") {
+			throw new Error(`Invalid agent definition "${filePath}": excludeTools must be a comma-separated string`);
+		}
+		const toolControls = {
+			excludeTools: rawExclusions?.split(",").map((entry) => entry.trim()).filter(Boolean),
+			noMcp: frontmatter.noMcp as unknown,
+		};
+		try {
+			validateToolControls(toolControls);
+		} catch (error) {
+			throw new Error(`Invalid agent definition "${filePath}": ${(error as Error).message}`);
+		}
+
 		const tools = frontmatter.tools
 			?.split(",")
 			.map((t: string) => t.trim())
@@ -56,6 +72,8 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentTypeCo
 			name: frontmatter.name,
 			description: frontmatter.description,
 			...(tools && tools.length > 0 ? { tools } : {}),
+			...(toolControls.excludeTools !== undefined ? { excludeTools: toolControls.excludeTools } : {}),
+			...(toolControls.noMcp !== undefined ? { noMcp: toolControls.noMcp } : {}),
 			...(frontmatter.model ? { model: frontmatter.model } : {}),
 			systemPrompt: body,
 			source,

@@ -10,8 +10,9 @@ import * as path from "node:path";
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
 import { createStructuredOutputExtension, EMIT_RESULT_TOOL } from "./structured.ts";
 import { addUsage, emptyUsage, type UsageStats } from "./types.ts";
+import { type ToolControls, validateToolControls } from "./tool-controls.ts";
 
-export interface SubagentRequest {
+export interface SubagentRequest extends ToolControls {
 	prompt: string;
 	model?: string;
 	tools?: string[];
@@ -104,7 +105,8 @@ function lastEmitResultArguments(messages: Message[]): unknown {
 }
 
 export async function runSubagent(request: SubagentRequest): Promise<SubagentResult> {
-	const { prompt, model, tools, cwd, schema, signal, timeoutMs, systemPrompt, appendSystemPrompt, onEvent } = request;
+	validateToolControls(request, Boolean(request.schema));
+	const { prompt, model, tools, excludeTools, noMcp, cwd, schema, signal, timeoutMs, systemPrompt, appendSystemPrompt, onEvent } = request;
 
 	// Hard recursion guard: a subagent that itself spawns workflows could
 	// otherwise multiply subprocesses without bound.
@@ -126,6 +128,8 @@ export async function runSubagent(request: SubagentRequest): Promise<SubagentRes
 		const toolList = schema ? [...new Set([...tools, EMIT_RESULT_TOOL])] : tools;
 		args.push("--tools", toolList.join(","));
 	}
+	if (excludeTools && excludeTools.length > 0) args.push("--exclude-tools", excludeTools.join(","));
+	if (noMcp) args.push("--no-mcp");
 	if (systemPrompt) args.push("--system-prompt", systemPrompt);
 
 	// --append-system-prompt accepts text or a file path; prompt text that

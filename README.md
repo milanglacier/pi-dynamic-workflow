@@ -8,6 +8,8 @@ The session LLM receives an authoring brief, writes a small async JS body that c
 
 ## Install
 
+Requires Pi `>=1.0.4 <2.0.0`.
+
 Install from npm with pi's package manager:
 
 ```bash
@@ -98,7 +100,7 @@ The LLM will set `agentType` on the relevant `agent()` calls. Each agent type br
 /workflow audit the codebase — all subagents should be read-only
 ```
 
-The LLM will set `tools: ["read", "grep", "find", "ls"]` on `agent()` calls so subagents can't modify files.
+The LLM will set `tools: ["read", "grep", "find", "ls", "codemode"]` on `agent()` calls for read-only analysis, including `codemode` for configured MCP tools. Read-only tasks do not imply MCP disablement.
 
 #### Resume a previous run
 
@@ -145,7 +147,7 @@ Agent types are reusable subagent profiles — like preset characters with their
 ---
 name: security-reviewer
 description: Reviews code for security issues with an adversarial mindset
-tools: read, grep, find, ls
+tools: read, grep, find, ls, codemode
 model: sonnet
 ---
 You are a security reviewer. For every file you examine:
@@ -164,7 +166,9 @@ with severity (critical/high/medium/low) and a one-line recommendation.
 | ------------- | -------- | ---------------------------------------------------------------------------- |
 | `name`        | Yes      | Identifier used in `agentType` (kebab-case recommended)                      |
 | `description` | Yes      | Shown in the `/workflow` brief so the LLM knows when to reach for it         |
-| `tools`       | No       | Comma-separated tool list (e.g. `read, grep, find`). Omit to grant all tools |
+| `tools`       | No       | Comma-separated tool names or `*` patterns. Omit to use Pi's configured defaults |
+| `excludeTools` | No      | Comma-separated tool names or `*` patterns excluded after selection         |
+| `noMcp`       | No       | `true` or `false`; `true` disables built-in MCP                              |
 | `model`       | No       | Model override for this agent type (e.g. `haiku`, `sonnet`)                  |
 
 Once defined, the LLM can use them via `agent("...", { agentType: "security-reviewer" })`. Changing an agent type's `.md` file invalidates cached results for runs that used it — so resume will re-run those calls live.
@@ -181,14 +185,14 @@ If you find yourself repeating the same orchestration pattern, save it as a reus
 // Scan every file in a directory for a specific issue and report findings
 const files = await agent(
   `List every .ts file under ${args.dir || "src/"}. Output one path per line.`,
-  { label: "list-files", tools: ["find"], schema: { type: "array", items: { type: "string" } } }
+  { label: "list-files", tools: ["find", "codemode"], schema: { type: "array", items: { type: "string" } } }
 );
 if (!files || files.length === 0) return { findings: [], message: "No files found" };
 
 const results = await parallel(
   files.map(f => () =>
     agent(`Scan ${f} for ${args.issue || "hardcoded secrets"}. Report findings concisely.`,
-      { label: `scan-${f}`, phase: "scan", tools: ["read", "grep"] }
+      { label: `scan-${f}`, phase: "scan", tools: ["read", "grep", "codemode"] }
     )
   )
 );
@@ -245,12 +249,12 @@ const info = await agent("Count the exported functions in src/foo.ts", {
   },
 });
 
-// Per-agent options: label, phase, model, tools (e.g. ["read","grep"]),
-// cwd (working dir relative to the session), schema (JSON Schema),
-// timeout (ms; kills the subagent and resolves null), systemPrompt,
-// appendSystemPrompt, and agentType — a saved agent definition from
-// ~/.pi/agent/agents/*.md or <project>/.pi/agents/*.md (frontmatter
-// name/description/tools/model; body = system prompt).
+// Options: label (display name), phase (group), model, tools (e.g. ["read","grep","codemode"]),
+// excludeTools (names or * patterns excluded after selection), noMcp (disable built-in MCP),
+// cwd (working dir), schema (JSON Schema for structured output), timeout (ms; kills
+// the subagent and resolves null), systemPrompt / appendSystemPrompt, and agentType
+// (a saved agent definition from ~/.pi/agent/agents/*.md or <project>/.pi/agents/*.md
+// supplying its system prompt plus default tools/excludeTools/noMcp/model).
 const verdict = await agent("Review src/auth.ts", { agentType: "security-reviewer", timeout: 120000 });
 
 // Run thunks concurrently. Failures become null; the batch never rejects.
@@ -282,6 +286,14 @@ return { summary: inputs.length };        // return value becomes the tool resul
 Scripts must be deterministic so runs can resume: `Date.now()`, `Math.random()`, and
 zero-arg `new Date()` throw in the sandbox — pass timestamps or seeds in via `args`.
 
+### Subagent tool controls
+
+- `tools?: string[]` selects tool names or `*` patterns via `--tools`. Omission or `tools: []` uses Pi's configured defaults. MCP tools are preserved unless an entry starts with `mcp__`; preservation does not automatically declare them to the model or add `codemode` or `tool_search`. Include `codemode` in restricted tool lists to call configured MCP tools from scripts. MCP permissions follow their configuration, not the read-only built-in tool selection.
+- `excludeTools?: string[]` passes names or `*` patterns to `--exclude-tools` after selection, so exclusions take precedence. For example, `excludeTools: ["mcp__github__delete_*"]` excludes matching GitHub tools. With `schema`, exclusions matching the required `emit_result` tool are rejected before spawning.
+- `noMcp?: boolean` passes `--no-mcp` when true, disabling built-in MCP servers and tools, including resource helpers. Set it only when MCP disablement is requested, not merely for read-only analysis. It does not disable replacement MCP extensions; `mcp__*` exclusions alone do not match resource helpers.
+
+Call options override named-profile defaults: `excludeTools: []` clears profile exclusions and `noMcp: false` clears profile MCP disablement. Subagents load their own Pi configuration; they do not inherit the parent session's CLI tool restrictions or MCP disablement.
+
 ### Saved workflows (technical)
 
 Saved workflows are discovered from `~/.pi/agent/workflows/*.js` (user) and `<project>/.pi/workflows/*.js` (project; overrides user on name collision). The file name (minus `.js`) is the workflow name; a leading `//` comment is its description. Run them via the `workflowName` tool parameter or compose them from a script with `workflow(name, args)`. See [Creating saved workflows](#creating-saved-workflows) for a step-by-step example.
@@ -312,7 +324,7 @@ These are the rules the LLM follows when authoring workflow scripts. They're als
 4. **Use `schema` when you need machine-readable output** (counts, verdicts, lists). Plain text is fine for prose to be aggregated by another agent.
 5. **Scale to what the user asked for.** A two-step task needs two agents, not a judge panel. Reserve heavy patterns for tasks that demand rigor.
 6. **Concurrency is capped** (default `max(2, min(8, cpus - 2))`); you may launch many agents and let the scheduler queue them. Set `maxConcurrency` lower for heavy tasks.
-7. **Restrict tools** for read-only analysis agents (`tools: ["read","grep","find","ls"]`) so they cannot mutate the repo.
+7. **Restrict tools** for read-only analysis agents (`tools: ["read","grep","find","ls","codemode"]`). Include codemode for MCP access; disable MCP only when requested.
 8. **Set `timeout` on agents that could wander** and `maxCost`/`maxTokens` on expensive fan-outs; a timed-out agent resolves to null like any other failure.
 9. **Use `background: true` for long runs** the user shouldn't wait on; report the run id so it can be stopped (`/workflow-stop`) or resumed later.
 
