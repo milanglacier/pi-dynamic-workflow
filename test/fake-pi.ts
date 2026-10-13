@@ -7,6 +7,7 @@
  *   depth      - assistant text is the child's PI_WORKFLOW_DEPTH value
  *   structured - assistant message with an emit_result toolCall {answer: 5}
  *   fail       - writes "boom" to stderr, exit 3
+ *   truncated  - partial assistant text, output-limit warning, exit 1
  *   sleep      - hangs for 30s (for abort tests; SIGTERM kills it)
  *   slow       - waits 150ms, then behaves like "ok" (for concurrency tests)
  *   selfkill   - SIGKILLs itself after emitting one message (external signal death)
@@ -23,6 +24,17 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
+
+const truncatedMessage: AssistantMessage = {
+	role: "assistant", content: [{ type: "text", text: "PARTIAL_OUTPUT" }],
+	api: "anthropic-messages", provider: "fake", model: "fake-model",
+	usage: {
+		input: 1, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 3,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+	},
+	stopReason: "length", timestamp: 0,
+};
 
 const STUB_SOURCE = `#!/usr/bin/env node
 const mode = process.env.FAKE_PI_MODE || "ok";
@@ -75,6 +87,10 @@ switch (mode) {
 			),
 		);
 		process.exit(0);
+	case "truncated":
+		console.log(${JSON.stringify(JSON.stringify({ type: "message_end", message: truncatedMessage }))});
+		console.error("Warning: response was cut off at the model's output token limit.");
+		process.exit(1);
 	case "fail":
 		console.error("boom");
 		process.exit(3);

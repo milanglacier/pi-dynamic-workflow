@@ -82,6 +82,17 @@ test("nonzero exit reports failure with stderr", async () => {
 	assert.match(result.errorMessage ?? "", /boom/);
 });
 
+test("output-limit exit preserves partial text and reports failure", async () => {
+	process.env.FAKE_PI_MODE = "truncated";
+	const result = await runSubagent({ prompt: "anything", cwd });
+	assert.strictEqual(result.ok, false);
+	assert.strictEqual(result.aborted, false);
+	assert.strictEqual(result.exitCode, 1);
+	assert.strictEqual(result.stopReason, "length");
+	assert.strictEqual(result.outputText, "PARTIAL_OUTPUT");
+	assert.match(result.errorMessage ?? "", /output token limit/);
+});
+
 test("schema run extracts emit_result arguments", async () => {
 	process.env.FAKE_PI_MODE = "structured";
 	const result = await runSubagent({
