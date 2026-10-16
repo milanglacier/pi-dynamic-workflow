@@ -104,6 +104,14 @@ test("schema run extracts emit_result arguments", async () => {
 	assert.deepStrictEqual(result.structured, { answer: 5 });
 });
 
+test("schema run rejects malformed emit_result arguments", async () => {
+	process.env.FAKE_PI_MODE = "malformed";
+	const result = await runSubagent({ prompt: "anything", cwd, schema: { type: "object" } });
+	assert.strictEqual(result.ok, false);
+	assert.strictEqual(result.structured, undefined);
+	assert.match(result.errorMessage ?? "", /emit_result/);
+});
+
 test("schema run without emit_result call fails", async () => {
 	process.env.FAKE_PI_MODE = "ok";
 	const result = await runSubagent({

@@ -97,6 +97,7 @@ function lastEmitResultArguments(messages: Message[]): unknown {
 		for (let j = msg.content.length - 1; j >= 0; j--) {
 			const part = msg.content[j];
 			if (part?.type === "toolCall" && part.name === EMIT_RESULT_TOOL) {
+				if ("argumentsError" in part && part.argumentsError) continue;
 				return part.arguments;
 			}
 		}

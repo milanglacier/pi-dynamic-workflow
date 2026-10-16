@@ -6,6 +6,7 @@
  *   ok         - one assistant message with text "FAKE_PI_OK", exit 0
  *   depth      - assistant text is the child's PI_WORKFLOW_DEPTH value
  *   structured - assistant message with an emit_result toolCall {answer: 5}
+ *   malformed  - rejected emit_result arguments followed by a final text response
  *   fail       - writes "boom" to stderr, exit 3
  *   truncated  - partial assistant text, output-limit warning, exit 1
  *   sleep      - hangs for 30s (for abort tests; SIGTERM kills it)
@@ -34,6 +35,15 @@ const truncatedMessage: AssistantMessage = {
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 	},
 	stopReason: "length", timestamp: 0,
+};
+
+const malformedArgumentsMessage: AssistantMessage = {
+	...truncatedMessage,
+	content: [{
+		type: "toolCall", id: "malformed-1", name: "emit_result", arguments: {},
+		argumentsError: "Invalid JSON in final tool arguments",
+	}],
+	stopReason: "toolUse",
 };
 
 const STUB_SOURCE = `#!/usr/bin/env node
@@ -86,6 +96,10 @@ switch (mode) {
 				"toolUse",
 			),
 		);
+		process.exit(0);
+	case "malformed":
+		console.log(${JSON.stringify(JSON.stringify({ type: "message_end", message: malformedArgumentsMessage }))});
+		console.log(message([{ type: "text", text: "Unable to emit the result." }]));
 		process.exit(0);
 	case "truncated":
 		console.log(${JSON.stringify(JSON.stringify({ type: "message_end", message: truncatedMessage }))});
