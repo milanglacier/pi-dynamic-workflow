@@ -27,7 +27,8 @@
 		"ai-agents"
 	],
 	"files": [
-		"src"
+		"src",
+		"CHANGELOG.md"
 	],
 	"pi": {
 		"extensions": [
