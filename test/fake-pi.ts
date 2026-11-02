@@ -5,8 +5,10 @@
  * canned JSON event stream. Behavior is selected via the FAKE_PI_MODE env var:
  *   ok         - one assistant message with text "FAKE_PI_OK", exit 0
  *   depth      - assistant text is the child's PI_WORKFLOW_DEPTH value
- *   structured - assistant message with an emit_result toolCall {answer: 5}
- *   malformed  - rejected emit_result arguments followed by a final text response
+ *   structured - emit_result toolCall {answer: 5} and pi's accepted tool result
+ *   coerced    - emit_result toolCall {answer: "5"}; pi's tool result holds {answer: 5}
+ *   rejected   - emit_result toolCall {} that pi's schema check rejects, then a final text response
+ *   malformed  - unparseable emit_result arguments that pi rejects, then a final text response
  *   fail       - writes "boom" to stderr, exit 3
  *   truncated  - partial assistant text, output-limit warning, exit 1
  *   sleep      - hangs for 30s (for abort tests; SIGTERM kills it)
@@ -82,6 +84,15 @@ const message = (content, stopReason = "stop") =>
 		},
 	});
 
+const toolResult = (toolCallId, { details = {}, isError = false, text = "Structured result recorded." } = {}) =>
+	JSON.stringify({
+		type: "message_end",
+		message: {
+			role: "toolResult", toolCallId, toolName: "emit_result",
+			content: [{ type: "text", text }], details, isError, timestamp: 0,
+		},
+	});
+
 switch (mode) {
 	case "ok":
 		console.log(message([{ type: "text", text: "FAKE_PI_OK" }]));
@@ -96,9 +107,31 @@ switch (mode) {
 				"toolUse",
 			),
 		);
+		console.log(toolResult("t1", { details: { answer: 5 } }));
+		process.exit(0);
+	case "coerced":
+		console.log(
+			message(
+				[{ type: "toolCall", id: "t1", name: "emit_result", arguments: { answer: "5" } }],
+				"toolUse",
+			),
+		);
+		console.log(toolResult("t1", { details: { answer: 5 } }));
+		process.exit(0);
+	case "rejected":
+		console.log(message([{ type: "toolCall", id: "t1", name: "emit_result", arguments: {} }], "toolUse"));
+		console.log(toolResult("t1", {
+			isError: true,
+			text: 'Validation failed for tool "emit_result":\\n  - answer: missing\\n\\nReceived arguments:\\n{}',
+		}));
+		console.log(message([{ type: "text", text: "Unable to emit the result." }]));
 		process.exit(0);
 	case "malformed":
 		console.log(${JSON.stringify(JSON.stringify({ type: "message_end", message: malformedArgumentsMessage }))});
+		console.log(toolResult("malformed-1", {
+			isError: true,
+			text: 'Invalid arguments for tool "emit_result": Invalid JSON in final tool arguments',
+		}));
 		console.log(message([{ type: "text", text: "Unable to emit the result." }]));
 		process.exit(0);
 	case "truncated":

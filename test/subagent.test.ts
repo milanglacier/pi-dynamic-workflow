@@ -104,6 +104,31 @@ test("schema run extracts emit_result arguments", async () => {
 	assert.deepStrictEqual(result.structured, { answer: 5 });
 });
 
+test("schema run returns the payload pi accepted, not the raw call arguments", async () => {
+	process.env.FAKE_PI_MODE = "coerced";
+	const result = await runSubagent({
+		prompt: "anything",
+		cwd,
+		schema: { type: "object", properties: { answer: { type: "number" } }, required: ["answer"] },
+	});
+	assert.strictEqual(result.ok, true);
+	assert.deepStrictEqual(result.structured, { answer: 5 });
+});
+
+test("schema run fails with pi's reason when pi rejected every emit_result call", async () => {
+	process.env.FAKE_PI_MODE = "rejected";
+	const result = await runSubagent({
+		prompt: "anything",
+		cwd,
+		schema: { type: "object", properties: { answer: { type: "number" } }, required: ["answer"] },
+	});
+	assert.strictEqual(result.ok, false);
+	assert.strictEqual(result.structured, undefined);
+	assert.match(result.errorMessage ?? "", /emit_result/);
+	assert.match(result.errorMessage ?? "", /answer: missing/);
+	assert.doesNotMatch(result.errorMessage ?? "", /Received arguments/);
+});
+
 test("schema run rejects malformed emit_result arguments", async () => {
 	process.env.FAKE_PI_MODE = "malformed";
 	const result = await runSubagent({ prompt: "anything", cwd, schema: { type: "object" } });

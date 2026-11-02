@@ -39,7 +39,7 @@ export interface SubagentResult {
 	ok: boolean;
 	/** Last assistant text output. */
 	outputText: string;
-	/** Parsed `emit_result` arguments when a schema was supplied. */
+	/** The `emit_result` payload pi accepted, when a schema was supplied. */
 	structured?: unknown;
 	usage: UsageStats;
 	model?: string;
@@ -90,19 +90,27 @@ function lastAssistantText(messages: Message[]): string {
 	return "";
 }
 
-function lastEmitResultArguments(messages: Message[]): unknown {
+/**
+ * The payload of the last `emit_result` call pi accepted, or why pi rejected
+ * the last call when it accepted none.
+ *
+ * pi checks tool arguments against the schema before the tool runs, after
+ * converting loosely typed values (`"5"` to `5`), and the tool returns the
+ * arguments pi passed it as `details`. The tool result therefore holds the
+ * payload the schema promises; the assistant's tool call may hold arguments pi
+ * rejected or converted.
+ */
+function emitResultOutcome(messages: Message[]): { payload: unknown } | { rejection?: string } {
+	let rejection: string | undefined;
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const msg = messages[i];
-		if (msg?.role !== "assistant") continue;
-		for (let j = msg.content.length - 1; j >= 0; j--) {
-			const part = msg.content[j];
-			if (part?.type === "toolCall" && part.name === EMIT_RESULT_TOOL) {
-				if ("argumentsError" in part && part.argumentsError) continue;
-				return part.arguments;
-			}
-		}
+		if (msg?.role !== "toolResult" || msg.toolName !== EMIT_RESULT_TOOL) continue;
+		if (!msg.isError) return { payload: msg.details };
+		const text = msg.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
+		// pi appends the arguments it received, which say nothing new here.
+		rejection ??= (text.split("\n\nReceived arguments:")[0] ?? "").trim();
 	}
-	return undefined;
+	return { rejection };
 }
 
 export async function runSubagent(request: SubagentRequest): Promise<SubagentResult> {
@@ -296,12 +304,14 @@ export async function runSubagent(request: SubagentRequest): Promise<SubagentRes
 	}
 
 	if (schema) {
-		const structured = lastEmitResultArguments(messages);
-		if (structured === undefined) {
-			result.errorMessage = `Subagent finished without calling ${EMIT_RESULT_TOOL} (structured output missing)`;
+		const outcome = emitResultOutcome(messages);
+		if (!("payload" in outcome)) {
+			result.errorMessage = outcome.rejection === undefined
+				? `Subagent finished without calling ${EMIT_RESULT_TOOL} (structured output missing)`
+				: `Subagent called ${EMIT_RESULT_TOOL}, but pi rejected its arguments: ${outcome.rejection || "no reason given"}`;
 			return result;
 		}
-		result.structured = structured;
+		result.structured = outcome.payload;
 	}
 
 	result.ok = true;

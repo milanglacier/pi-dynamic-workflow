@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { type JsonObject, validateToolArguments } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { createStructuredOutputExtension, EMIT_RESULT_TOOL } from "../src/structured.ts";
 import { createToolContext } from "./tool-context.ts";
@@ -52,6 +53,20 @@ test("generated extension registers a terminating emit_result tool embedding the
 		const result = await registered.execute("t1", { answer: 5 }, undefined, undefined, createToolContext(process.cwd()));
 		assert.strictEqual(result.terminate, true);
 		assert.deepStrictEqual(result.details, { answer: 5 });
+
+		// pi runs this check before execute(): it rejects a payload missing a
+		// required field and converts loosely typed values, so the tool result's
+		// details hold the converted payload.
+		const piTool = { name: registered.name, description: "", parameters: registered.parameters };
+		const validate = (args: JsonObject): unknown =>
+			validateToolArguments(piTool, { type: "toolCall", id: "t2", name: piTool.name, arguments: args });
+		assert.throws(() => validate({}), /answer: missing/);
+		const converted = validate({ answer: "5" });
+		assert.deepStrictEqual(converted, { answer: 5 });
+		const convertedResult = await registered.execute(
+			"t2", converted, undefined, undefined, createToolContext(process.cwd()),
+		);
+		assert.deepStrictEqual(convertedResult.details, { answer: 5 });
 	} finally {
 		fs.rmSync(tsconfigPath, { force: true });
 		fs.unlinkSync(nodeModulesLink);
